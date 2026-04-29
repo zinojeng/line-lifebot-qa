@@ -16,12 +16,8 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-04-30-deepseek-provider-v10
-LLM_PROVIDER=deepseek
-DEEPSEEK_API_KEY=...
-DEEPSEEK_MODEL=deepseek-v4-pro
-DEEPSEEK_THINKING_ENABLED=1
-DEEPSEEK_REASONING_EFFORT=high
+APP_VERSION=2026-04-30-threshold-review-override-v11
+LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_TIMEOUT=20
@@ -50,10 +46,10 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-04-30-deepseek-provider-v10
-LLM_PROVIDER=deepseek
-DEEPSEEK_API_KEY=...
-DEEPSEEK_MODEL=deepseek-v4-pro
+APP_VERSION=2026-04-30-threshold-review-override-v11
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.1-flash-lite-preview
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
 LINE_SESSION_SCOPE=user
@@ -68,10 +64,10 @@ LINE_EVIDENCE_REVIEW_ENABLED=1
 
 The same minimal set is also saved in `zeabur.env.example`.
 
-`GOOGLE_API_KEY` is also accepted as a Gemini fallback. To use Gemini instead
-of DeepSeek, set `LLM_PROVIDER=gemini` and configure `GEMINI_API_KEY` or
-`GOOGLE_API_KEY`. To use DeepSeek's lower-latency model, set
-`DEEPSEEK_MODEL=deepseek-v4-flash`.
+`GOOGLE_API_KEY` is also accepted as a Gemini fallback. DeepSeek remains
+available as an optional provider by setting `LLM_PROVIDER=deepseek`,
+`DEEPSEEK_API_KEY`, and `DEEPSEEK_MODEL=deepseek-v4-pro` or
+`deepseek-v4-flash`.
 
 ## Background Knowledge
 
@@ -283,9 +279,9 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-04-30-deepseek-provider-v10",
-  "llm_provider": "deepseek",
-  "model": "deepseek-v4-pro",
+  "app_version": "2026-04-30-threshold-review-override-v11",
+  "llm_provider": "gemini",
+  "model": "gemini-3.1-flash-lite-preview",
   "features": {
     "english_name_memory": true,
     "trailing_question_removal": true,
@@ -304,6 +300,7 @@ The health check should include:
     "mmr_style_diversity": true,
     "local_coverage_answerability": true,
     "comparative_threshold_answering": true,
+    "threshold_review_override": true,
     "deepseek_provider": true,
     "llm_reranker": true,
     "coverage_answerability_check": true,

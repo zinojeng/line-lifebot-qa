@@ -66,7 +66,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-deepseek-provider-v10")
+APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-threshold-review-override-v11")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -999,7 +999,14 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
     knowledge_text = knowledge_prompt_from_hits(selected_hits)
     evidence_review = build_evidence_review(api_key, user_text, knowledge_text)
     if evidence_review_says_unanswerable(evidence_review):
-        return knowledge_no_answer_text()
+        locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits)
+        if not (comparative_threshold_question(user_text) and locally_answerable):
+            return knowledge_no_answer_text()
+        evidence_review = (
+            evidence_review
+            + "\n\n本地 coverage override：此題可用指南片段中的 eGFR 門檻做比較式回答；"
+            "不要補充片段外資訊，也不要給個人化劑量。"
+        )
     system_text = (
         SYSTEM_PROMPT
         + memory_prompt(line_user_id)
@@ -1085,6 +1092,7 @@ def health() -> dict[str, Any]:
             "mmr_style_diversity": True,
             "local_coverage_answerability": True,
             "comparative_threshold_answering": True,
+            "threshold_review_override": True,
             "deepseek_provider": True,
             "llm_reranker": LINE_LLM_RERANK_ENABLED,
             "coverage_answerability_check": True,
