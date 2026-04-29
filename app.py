@@ -66,7 +66,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-threshold-review-override-v11")
+APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-clinical-intent-v12")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -727,21 +727,143 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def build_retrieval_query(api_key: str, user_text: str, recent_context: str) -> str:
+def json_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def clinical_intent_text(clinical_intent: dict[str, Any] | None) -> str:
+    if not clinical_intent:
+        return ""
+    parts = [
+        str(clinical_intent.get("clinical_intent") or "").strip(),
+        str(clinical_intent.get("question_type") or "").strip(),
+        str(clinical_intent.get("answer_strategy") or "").strip(),
+        *json_list(clinical_intent.get("patient_context")),
+        *json_list(clinical_intent.get("must_retrieve")),
+        *json_list(clinical_intent.get("required_facets")),
+    ]
+    return " ".join(part for part in parts if part).strip()
+
+
+def clinical_intent_prompt(clinical_intent: dict[str, Any] | None) -> str:
+    if not clinical_intent:
+        return ""
+    return (
+        "\n\n臨床問題理解：\n"
+        "以下 JSON 是本輪回答前對使用者問題的臨床意圖拆解，用來定義要檢索與整理哪些證據；"
+        "它不是醫療知識來源，最終回答仍只能根據指南片段。\n"
+        f"{json.dumps(clinical_intent, ensure_ascii=False)}"
+    )
+
+
+def fallback_clinical_intent(user_text: str) -> dict[str, Any]:
+    if comparative_threshold_question(user_text):
+        return {
+            "clinical_intent": "advanced_ckd_medication_selection",
+            "question_type": "medication_threshold_comparison",
+            "patient_context": ["diabetes", "advanced CKD", "low eGFR", user_text],
+            "must_retrieve": [
+                "CKD glucose-lowering therapy",
+                "SGLT2 inhibitor eGFR initiation threshold",
+                "metformin eGFR contraindication or dose limitation",
+                "GLP-1 receptor agonist use in CKD",
+                "finerenone or nonsteroidal MRA eGFR threshold",
+                "hypoglycemia risk in advanced CKD",
+                "insulin safety or dose adjustment in kidney impairment",
+            ],
+            "required_facets": ["kidney_context", "medication", "threshold"],
+            "answer_strategy": (
+                "compare retrieved eGFR thresholds with the user's eGFR value; state what is not suitable "
+                "to initiate, what may be considered from the retrieved guideline snippets, and what requires clinician individualization"
+            ),
+            "do_not_answer_with": [
+                "requiring an exact sentence for the exact eGFR number",
+                "personalized dose recommendation",
+                "model general medical knowledge",
+            ],
+        }
+    facets = sorted(required_facets(user_text))
+    return {
+        "clinical_intent": "diabetes_guideline_question",
+        "question_type": "guideline_grounded_answer",
+        "patient_context": [user_text],
+        "must_retrieve": [],
+        "required_facets": facets,
+        "answer_strategy": "answer only if retrieved guideline snippets cover the user's core question",
+        "do_not_answer_with": ["model general medical knowledge", "unsupported inference"],
+    }
+
+
+def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> dict[str, Any]:
+    fallback = fallback_clinical_intent(user_text)
     if not LINE_QUERY_PLANNING_ENABLED or not api_key:
-        return user_text
+        return fallback
+
+    system_text = (
+        "你是糖尿病指南問答的 clinical intent parser，不是回答者。"
+        "你的任務是先理解使用者真正要問的臨床問題，定義需要檢索哪些指南證據。"
+        "不要提供醫療建議，不要回答問題，不要使用模型內建醫學知識下結論。"
+        "請輸出 JSON，欄位固定為："
+        "clinical_intent, question_type, patient_context, must_retrieve, required_facets, answer_strategy, do_not_answer_with。"
+        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, diagnosis, pregnancy, hypoglycemia, treatment, foot_care, frequency。"
+        "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
+        "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
+        "answer_strategy 要明確說明：用檢索到的 eGFR 門檻與使用者 eGFR 數值比較，不需要文件逐字出現 exact eGFR 數字。"
+    )
+    prompt = (
+        f"本次問題：{user_text}\n\n"
+        f"{recent_context or '最近對話脈絡：無'}\n\n"
+        "請先輸出臨床意圖 JSON。"
+    )
+    try:
+        raw = call_llm(
+            api_key,
+            system_text,
+            prompt,
+            max_output_tokens=520,
+            temperature=0.05,
+            timeout=min(GEMINI_TIMEOUT, 10),
+        )
+    except Exception as exc:
+        print(f"{LLM_PROVIDER} clinical intent failed: {type(exc).__name__}: {exc}")
+        return fallback
+
+    data = extract_json_object(raw)
+    if not data:
+        return fallback
+    merged = {**fallback, **data}
+    for key in ("patient_context", "must_retrieve", "required_facets", "do_not_answer_with"):
+        merged[key] = json_list(merged.get(key))
+    return merged
+
+
+def build_retrieval_query(
+    api_key: str,
+    user_text: str,
+    recent_context: str,
+    clinical_intent: dict[str, Any] | None = None,
+) -> str:
+    if not LINE_QUERY_PLANNING_ENABLED or not api_key:
+        return " ".join(part for part in [user_text, clinical_intent_text(clinical_intent)] if part).strip() or user_text
 
     system_text = (
         "你不是回答者，也不要提供醫療建議。"
         "你的唯一任務是把 LINE 病友問題轉成糖尿病指南文件檢索查詢，來源可能包含 ADA、AACE、KDIGO。"
         "請根據本次問題與最近對話脈絡，補上可能出現在這些指南文件中的英文術語、縮寫、同義詞與章節詞。"
+        "你會收到 clinical intent JSON；請優先根據 must_retrieve、required_facets、answer_strategy 產生多面向檢索詞。"
         "若問題提到洗腎/透析/腎衰竭與血糖控制目標，請加入 dialysis、kidney failure、glycemic goals、A1C goal、A1C reliability、CGM、BGM、glycated albumin、fructosamine。"
+        "若 question_type 是 medication_threshold_comparison，請加入 CKD glucose-lowering therapy、SGLT2 inhibitor eGFR threshold、metformin eGFR、GLP-1 RA CKD、finerenone nonsteroidal MRA eGFR、hypoglycemia risk advanced CKD、insulin kidney impairment。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"
     )
     prompt = (
         f"本次問題：{user_text}\n\n"
         f"{recent_context or '最近對話脈絡：無'}\n\n"
+        f"{clinical_intent_prompt(clinical_intent) or '臨床問題理解：無'}\n\n"
         "請產生適合全文檢索糖尿病指南 Markdown 的查詢。"
     )
     try:
@@ -761,12 +883,36 @@ def build_retrieval_query(api_key: str, user_text: str, recent_context: str) -> 
     search_query = str(data.get("search_query") or "").strip()
     keywords = data.get("keywords") if isinstance(data.get("keywords"), list) else []
     keyword_text = " ".join(str(keyword).strip() for keyword in keywords if str(keyword).strip())
-    combined = " ".join(part for part in [user_text, search_query, keyword_text] if part).strip()
+    combined = " ".join(part for part in [user_text, clinical_intent_text(clinical_intent), search_query, keyword_text] if part).strip()
     return combined[:LINE_RETRIEVAL_QUERY_MAX_CHARS] or user_text
 
 
-def local_evidence_coverage(user_text: str, hits: list[KnowledgeHit]) -> tuple[bool, str]:
-    required = required_facets(user_text)
+def local_evidence_coverage(
+    user_text: str,
+    hits: list[KnowledgeHit],
+    clinical_intent: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
+    required = set(required_facets(user_text))
+    required.update(required_facets(clinical_intent_text(clinical_intent)))
+    required.update(
+        facet
+        for facet in json_list((clinical_intent or {}).get("required_facets"))
+        if facet
+        in {
+            "kidney_context",
+            "medication",
+            "threshold",
+            "glycemic_target",
+            "a1c_reliability",
+            "monitoring",
+            "diagnosis",
+            "pregnancy",
+            "hypoglycemia",
+            "treatment",
+            "foot_care",
+            "frequency",
+        }
+    )
     if not required:
         return bool(hits), ""
 
@@ -793,7 +939,12 @@ def comparative_threshold_question(user_text: str) -> bool:
     return has_numeric_threshold and has_kidney and has_medication
 
 
-def select_guideline_hits(api_key: str, user_text: str, candidates: list[KnowledgeHit]) -> tuple[list[KnowledgeHit], bool, str]:
+def select_guideline_hits(
+    api_key: str,
+    user_text: str,
+    candidates: list[KnowledgeHit],
+    clinical_intent: dict[str, Any] | None = None,
+) -> tuple[list[KnowledgeHit], bool, str]:
     if not candidates:
         return [], False, "沒有候選片段。"
     if not LINE_LLM_RERANK_ENABLED or not api_key:
@@ -803,6 +954,7 @@ def select_guideline_hits(api_key: str, user_text: str, candidates: list[Knowled
         "你是醫療指南檢索 reranker，不是回答者。"
         "你只能根據候選指南片段判斷哪些片段最能回答使用者問題。"
         "不要提供醫療建議，不要使用模型內建知識，不要補充候選片段以外的內容。"
+        "你會收到 clinical intent JSON；請根據 required_facets 與 answer_strategy 判斷片段是否足夠，而不是只看候選片段是否逐字命中使用者原句。"
         "請特別檢查問題中的所有核心概念是否都有片段支持，例如藥物類別、疾病階段、eGFR 門檻、禁忌或安全限制。"
         "優先選擇 recommendation、treatment、selection、screening、diagnosis、table_row、含 eGFR/threshold/contraindication/avoid/dose 的片段。"
         "若 CKD/eGFR/腎臟問題同時有 KDIGO 與 ADA 相關候選，請優先保留它們；若片段不足以完整回答，answerable 必須是 false。"
@@ -812,6 +964,7 @@ def select_guideline_hits(api_key: str, user_text: str, candidates: list[Knowled
     )
     prompt = (
         f"使用者問題：{user_text}\n\n"
+        f"{clinical_intent_prompt(clinical_intent) or '臨床問題理解：無'}\n\n"
         f"{knowledge_candidates_prompt(candidates)}\n\n"
         f"請選出最多 {LINE_LLM_RERANK_TOP_K} 個最能回答問題的候選 id，並判斷 evidence coverage 是否足夠。"
     )
@@ -861,9 +1014,9 @@ def select_guideline_hits(api_key: str, user_text: str, candidates: list[Knowled
         coverage_gaps = "；".join(str(gap) for gap in gaps if str(gap).strip())
     else:
         coverage_gaps = str(gaps or "").strip()
-    local_answerable, local_gap = local_evidence_coverage(user_text, selected)
+    local_answerable, local_gap = local_evidence_coverage(user_text, selected, clinical_intent)
     if not local_answerable:
-        all_candidates_answerable, all_candidates_gap = local_evidence_coverage(user_text, candidates)
+        all_candidates_answerable, all_candidates_gap = local_evidence_coverage(user_text, candidates, clinical_intent)
         if all_candidates_answerable:
             selected = candidates[:LINE_LLM_RERANK_TOP_K]
             local_answerable = True
@@ -880,13 +1033,19 @@ def select_guideline_hits(api_key: str, user_text: str, candidates: list[Knowled
     return selected, answerable, coverage_gaps
 
 
-def build_evidence_review(api_key: str, user_text: str, knowledge_text: str) -> str:
+def build_evidence_review(
+    api_key: str,
+    user_text: str,
+    knowledge_text: str,
+    clinical_intent: dict[str, Any] | None = None,
+) -> str:
     if not LINE_EVIDENCE_REVIEW_ENABLED or not api_key:
         return ""
 
     system_text = (
         "你是糖尿病指南證據整理助手，不是最終回答者。"
         "只能根據提供的指南片段整理，不可使用模型內建知識、未載入指南、新聞或推測補完。"
+        "你會收到 clinical intent JSON；請用 answer_strategy 組織證據，但不可把 clinical intent 當成醫療證據。"
         "請用繁體中文輸出精簡整理："
         "1. 可直接回答使用者問題的指南重點；"
         "2. 片段中明確的門檻、限制、藥物例外或安全提醒；"
@@ -896,7 +1055,12 @@ def build_evidence_review(api_key: str, user_text: str, knowledge_text: str) -> 
         "6. 片段不足或不能回答的地方。"
         "最後一行必須寫 ANSWERABLE: yes 或 ANSWERABLE: no。"
     )
-    prompt = f"使用者問題：{user_text}\n\n{knowledge_text}\n\n請先整理證據，不要寫給病友看的最終答案。"
+    prompt = (
+        f"使用者問題：{user_text}\n\n"
+        f"{clinical_intent_prompt(clinical_intent) or '臨床問題理解：無'}\n\n"
+        f"{knowledge_text}\n\n"
+        "請先整理證據，不要寫給病友看的最終答案。"
+    )
     try:
         return call_llm(
             api_key,
@@ -987,19 +1151,20 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         return f"目前快速問答服務尚未設定 {LLM_PROVIDER} API key。若你有血糖不舒服、低血糖症狀或血糖持續很高，請先聯絡醫療團隊。"
 
     recent_context = conversation_prompt(line_user_id)
-    retrieval_query = build_retrieval_query(api_key, user_text, recent_context)
+    clinical_intent = build_clinical_intent(api_key, user_text, recent_context)
+    retrieval_query = build_retrieval_query(api_key, user_text, recent_context, clinical_intent)
     candidates = search_knowledge_candidates(retrieval_query)
     if not candidates:
         return knowledge_no_answer_text()
 
-    selected_hits, rerank_answerable, coverage_gaps = select_guideline_hits(api_key, user_text, candidates)
+    selected_hits, rerank_answerable, coverage_gaps = select_guideline_hits(api_key, user_text, candidates, clinical_intent)
     if not selected_hits or not rerank_answerable:
         return knowledge_no_answer_text()
 
     knowledge_text = knowledge_prompt_from_hits(selected_hits)
-    evidence_review = build_evidence_review(api_key, user_text, knowledge_text)
+    evidence_review = build_evidence_review(api_key, user_text, knowledge_text, clinical_intent)
     if evidence_review_says_unanswerable(evidence_review):
-        locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits)
+        locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
         if not (comparative_threshold_question(user_text) and locally_answerable):
             return knowledge_no_answer_text()
         evidence_review = (
@@ -1011,6 +1176,7 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         SYSTEM_PROMPT
         + memory_prompt(line_user_id)
         + recent_context
+        + clinical_intent_prompt(clinical_intent)
         + knowledge_text
         + rerank_coverage_prompt(coverage_gaps)
         + evidence_review_prompt(evidence_review)
@@ -1080,6 +1246,7 @@ def health() -> dict[str, Any]:
             "session_scoped_context": True,
             "guideline_strict_grounding": True,
             "guideline_query_planning": LINE_QUERY_PLANNING_ENABLED,
+            "clinical_intent_planning": LINE_QUERY_PLANNING_ENABLED,
             "guideline_evidence_review": LINE_EVIDENCE_REVIEW_ENABLED,
             "multi_guideline_sources": True,
             "source_aware_reranking": True,

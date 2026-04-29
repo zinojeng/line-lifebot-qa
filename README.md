@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-04-30-threshold-review-override-v11
+APP_VERSION=2026-04-30-clinical-intent-v12
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -46,7 +46,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-04-30-threshold-review-override-v11
+APP_VERSION=2026-04-30-clinical-intent-v12
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -165,25 +165,29 @@ LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS=700
 
 Per message, the flow is:
 
-1. Use the current question plus short-term LINE context to create a guideline
-   search query with likely English terms, abbreviations, and section words.
-2. Search the mounted ADA, AACE, KDIGO, or other configured Markdown files with
+1. Use the current question plus short-term LINE context to create a clinical
+   intent JSON: clinical intent, question type, patient context, evidence facets,
+   must-retrieve topics, and answer strategy.
+2. Use that clinical intent JSON to create a guideline search query with likely
+   English terms, abbreviations, section words, and evidence targets.
+3. Search the mounted ADA, AACE, KDIGO, or other configured Markdown files with
    multi-query retrieval, source-aware scoring, section-aware scoring, and
    indexed metadata such as source, title, section, and table row type.
-3. Split table rows into separate retrievable snippets so medication tables,
+4. Split table rows into separate retrievable snippets so medication tables,
    eGFR thresholds, contraindications, and dosing/use considerations can rank
    independently.
-4. Merge candidates with coverage-aware and MMR-style selection so complementary
+5. Merge candidates with coverage-aware and MMR-style selection so complementary
    evidence facets, sources, and sections are less likely to be crowded out by
    repeated snippets from one chapter.
-5. Retrieve a candidate pool, then ask the configured LLM to rerank only those candidates
-   and decide whether the snippets cover all core concepts in the question.
-6. Apply a local coverage safety net so a conservative LLM reranker cannot
+6. Retrieve a candidate pool, then ask the configured LLM to rerank only those candidates
+   using the clinical intent JSON and decide whether the snippets cover all core
+   concepts in the question.
+7. Apply a local coverage safety net so a conservative LLM reranker cannot
    reject an answer when selected snippets already cover required facets such
    as CKD, medication, and eGFR thresholds.
-7. Ask the configured LLM to organize only the selected guideline snippets into an evidence
-   review, including source names and coverage gaps.
-8. Generate the final Traditional Chinese LINE answer from the guideline
+8. Ask the configured LLM to organize only the selected guideline snippets into an evidence
+   review, including source names, coverage gaps, and the clinical intent answer strategy.
+9. Generate the final Traditional Chinese LINE answer from the guideline
    snippets and evidence review.
 
 The final answer prompt still forbids the configured model from using built-in medical
@@ -279,7 +283,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-04-30-threshold-review-override-v11",
+  "app_version": "2026-04-30-clinical-intent-v12",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -288,6 +292,7 @@ The health check should include:
     "short_term_context": true,
     "guideline_strict_grounding": true,
     "guideline_query_planning": true,
+    "clinical_intent_planning": true,
     "guideline_evidence_review": true,
     "multi_guideline_sources": true,
     "source_aware_reranking": true,
