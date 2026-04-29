@@ -17,16 +17,51 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
 GEMINI_API_KEY=...
+APP_VERSION=2026-04-30-session-context-v2
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_TIMEOUT=20
 LINE_TIMEOUT=12
 LINE_MEMORY_ENABLED=1
+LINE_CONTEXT_ENABLED=1
+LINE_SESSION_SCOPE=user
+LINE_CONTEXT_MAX_MESSAGES=8
+LINE_CONTEXT_TTL_SECONDS=43200
 DATABASE_URL=postgresql://...
+LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_DIR=/Users/ander/documents/medical/diabetes/adaguidelines
+LINE_KNOWLEDGE_MAX_SNIPPETS=3
 ```
 
 `GOOGLE_API_KEY` is also accepted as a fallback. If Google AI Studio changes the
 preview model name, set `GEMINI_MODEL` to the new model name in Zeabur without
 changing the code.
+
+## Background Knowledge
+
+The webhook loads ADA Standards of Care Markdown files from `LINE_KNOWLEDGE_DIR`
+and performs local file-based retrieval before each Gemini answer. This is meant
+for LINE DM patient-education grounding, not for long-term user memory.
+
+Default source:
+
+```text
+/Users/ander/documents/medical/diabetes/adaguidelines
+```
+
+Useful settings:
+
+```bash
+LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_DIR=/Users/ander/documents/medical/diabetes/adaguidelines
+LINE_KNOWLEDGE_CHUNK_CHARS=1800
+LINE_KNOWLEDGE_MAX_SNIPPETS=3
+LINE_KNOWLEDGE_EXCERPT_CHARS=520
+```
+
+Health check includes `knowledge.available`, `knowledge.files`, and
+`knowledge.chunks` so deployment can verify the files are mounted correctly.
+For production, make sure you have permission to use the guideline files in this
+kind of application and mount/copy them into the deployed service path.
 
 ## LINE User Name Memory
 
@@ -38,7 +73,11 @@ Supported user commands:
 
 ```text
 我叫小明
+我是小明
 請記住我叫小明
+My name is John
+I am John
+Call me John
 你記得我的名字嗎？
 忘記我的名字
 ```
@@ -47,6 +86,42 @@ The bot only saves the user's display name/call name. It does not save diabetes
 preferences, blood glucose values, medication, addresses, phone numbers, or
 medical records. If `DATABASE_URL` is not set, the service falls back to SQLite
 at `LINE_MEMORY_DB` for local testing.
+
+## Short-Term Conversation Context
+
+The webhook can keep recent LINE messages for continuity, so follow-up questions
+like `那這樣可以吃嗎？` can use the previous answer as context. This is short-term
+conversation context, separate from name memory.
+
+Default behavior:
+
+```bash
+LINE_CONTEXT_ENABLED=1
+LINE_SESSION_SCOPE=user
+LINE_CONTEXT_MAX_MESSAGES=8
+LINE_CONTEXT_TTL_SECONDS=43200
+```
+
+This keeps the latest 8 user/bot messages for 12 hours per LINE user, group, or
+room. `LINE_SESSION_SCOPE` controls the context boundary:
+
+- `user`: one session per LINE user, even inside groups. This is the safest
+  default for health questions.
+- `chat`: one shared session per DM, group, or room.
+- `chat_user`: one session per user inside each group or room, and one session
+  per DM user.
+
+The webhook processes one active request at a time per session key, so rapid
+follow-up messages from the same session are written back in order. Different
+sessions can still run concurrently in the app process.
+
+Users can clear the current context by sending:
+
+```text
+重新開始
+清除剛剛對話
+清除上下文
+```
 
 ## LINE Webhook URL
 
@@ -73,3 +148,19 @@ Open:
 ```text
 http://127.0.0.1:8790/
 ```
+
+The health check should include:
+
+```json
+{
+  "app_version": "2026-04-30-session-context-v2",
+  "features": {
+    "english_name_memory": true,
+    "trailing_question_removal": true,
+    "short_term_context": true
+  }
+}
+```
+
+If LINE still replies to `I am ander` with a generic diabetes answer, the deployed
+service is likely still running an older build or `LINE_MEMORY_ENABLED=0`.

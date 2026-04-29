@@ -1,0 +1,340 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+import math
+import os
+import re
+import threading
+from typing import Iterable
+
+
+DEFAULT_KNOWLEDGE_DIR = "/Users/ander/documents/medical/diabetes/adaguidelines"
+
+TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+-]*|\d+(?:\.\d+)?|[\u4e00-\u9fff]{1,4}")
+HEADING_RE = re.compile(r"^#{1,4}\s+(.+)$")
+
+QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
+    "血糖": ("glucose", "glycemic", "hyperglycemia", "hypoglycemia", "blood glucose"),
+    "低血糖": ("hypoglycemia", "glucagon", "level 1", "level 2", "level 3"),
+    "高血糖": ("hyperglycemia", "glucose", "DKA", "HHS", "ketone"),
+    "酮酸": ("ketoacidosis", "DKA", "ketone"),
+    "飯": ("meal", "nutrition", "postprandial", "carbohydrate"),
+    "飲食": ("nutrition", "diet", "medical nutrition therapy", "carbohydrate", "meal"),
+    "運動": ("physical activity", "exercise", "sedentary", "fitness"),
+    "藥": ("pharmacologic", "medication", "insulin", "metformin", "GLP-1", "SGLT2"),
+    "胰島素": ("insulin", "hypoglycemia", "injection"),
+    "腎": ("kidney", "CKD", "albuminuria", "eGFR", "renal"),
+    "眼": ("retinopathy", "eye", "ophthalmologist", "retinal"),
+    "腳": ("foot", "neuropathy", "ulcer", "podiatrist"),
+    "心臟": ("cardiovascular", "heart", "ASCVD", "blood pressure", "lipid"),
+    "血壓": ("blood pressure", "hypertension"),
+    "膽固醇": ("lipid", "cholesterol", "statin", "triglyceride"),
+    "懷孕": ("pregnancy", "gestational", "preconception"),
+    "兒童": ("children", "adolescents", "pediatric", "youth"),
+    "老人": ("older adults", "geriatric", "frailty"),
+    "住院": ("hospital", "inpatient", "admission"),
+    "篩檢": ("screening", "diagnosis", "A1C", "fasting plasma glucose"),
+    "診斷": ("diagnosis", "classification", "A1C", "OGTT"),
+    "併發症": ("complications", "retinopathy", "kidney", "neuropathy", "cardiovascular"),
+    "體重": ("weight", "obesity", "lifestyle", "weight management"),
+    "血糖機": ("blood glucose monitoring", "BGM", "glucose meter"),
+    "連續血糖": ("continuous glucose monitoring", "CGM"),
+}
+
+
+@dataclass(frozen=True)
+class KnowledgeChunk:
+    source: str
+    title: str
+    section: str
+    text: str
+    tokens: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class KnowledgeHit:
+    source: str
+    title: str
+    section: str
+    excerpt: str
+    score: float
+
+
+class KnowledgeBase:
+    def __init__(self, root: Path, chunk_chars: int = 1800) -> None:
+        self.root = root
+        self.chunk_chars = chunk_chars
+        self.chunks: list[KnowledgeChunk] = []
+        self.document_frequency: dict[str, int] = {}
+        self.average_length = 1.0
+        self.load()
+
+    def load(self) -> None:
+        chunks: list[KnowledgeChunk] = []
+        for path in sorted(self.root.glob("*.md")):
+            chunks.extend(self._chunks_from_file(path))
+        self.chunks = chunks
+
+        df: dict[str, int] = {}
+        lengths = []
+        for chunk in chunks:
+            unique = set(chunk.tokens)
+            lengths.append(len(chunk.tokens))
+            for token in unique:
+                df[token] = df.get(token, 0) + 1
+        self.document_frequency = df
+        self.average_length = sum(lengths) / len(lengths) if lengths else 1.0
+
+    def _chunks_from_file(self, path: Path) -> list[KnowledgeChunk]:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        title = path.stem
+        current_section = ""
+        blocks: list[tuple[str, list[str]]] = []
+        section_lines: list[str] = []
+
+        for raw in text.splitlines():
+            line = raw.strip()
+            heading = HEADING_RE.match(line)
+            if heading:
+                if section_lines:
+                    blocks.append((current_section, section_lines))
+                    section_lines = []
+                current_section = normalize_heading(heading.group(1))
+                if current_section and title == path.stem:
+                    title = current_section
+                continue
+            if line and not line.startswith("> *") and "Downloaded" not in line:
+                section_lines.append(line)
+        if section_lines:
+            blocks.append((current_section, section_lines))
+
+        chunks: list[KnowledgeChunk] = []
+        for section, lines in blocks:
+            if section.lower() in {"references", "reference"}:
+                continue
+            buffer: list[str] = []
+            size = 0
+            for line in lines:
+                if size + len(line) > self.chunk_chars and buffer:
+                    chunk_text = "\n".join(buffer)
+                    chunks.append(
+                        KnowledgeChunk(path.name, title, section or title, chunk_text, tuple(tokenize(chunk_text)))
+                    )
+                    buffer = []
+                    size = 0
+                buffer.append(line)
+                size += len(line) + 1
+            if buffer:
+                chunk_text = "\n".join(buffer)
+                chunks.append(KnowledgeChunk(path.name, title, section or title, chunk_text, tuple(tokenize(chunk_text))))
+        return chunks
+
+    def search(self, query: str, limit: int = 3, excerpt_chars: int = 520) -> list[KnowledgeHit]:
+        query_tokens = list(expand_query_tokens(query))
+        if not query_tokens or not self.chunks:
+            return []
+
+        scored: list[tuple[float, KnowledgeChunk]] = []
+        for chunk in self.chunks:
+            score = self._score(query_tokens, chunk)
+            score *= domain_adjustment(query, chunk)
+            if score > 0:
+                scored.append((score, chunk))
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        hits: list[KnowledgeHit] = []
+        seen_sources: set[tuple[str, str]] = set()
+        for score, chunk in scored:
+            key = (chunk.source, chunk.section)
+            if key in seen_sources:
+                continue
+            seen_sources.add(key)
+            hits.append(
+                KnowledgeHit(
+                    source=chunk.source,
+                    title=chunk.title,
+                    section=chunk.section,
+                    excerpt=best_excerpt(chunk.text, query_tokens, excerpt_chars),
+                    score=score,
+                )
+            )
+            if len(hits) >= limit:
+                break
+        return hits
+
+    def _score(self, query_tokens: list[str], chunk: KnowledgeChunk) -> float:
+        token_counts: dict[str, int] = {}
+        for token in chunk.tokens:
+            token_counts[token] = token_counts.get(token, 0) + 1
+
+        score = 0.0
+        doc_count = len(self.chunks)
+        chunk_len = max(len(chunk.tokens), 1)
+        k1 = 1.4
+        b = 0.72
+        for token in query_tokens:
+            tf = token_counts.get(token, 0)
+            if not tf:
+                continue
+            df = self.document_frequency.get(token, 0)
+            idf = math.log(1 + (doc_count - df + 0.5) / (df + 0.5))
+            denom = tf + k1 * (1 - b + b * chunk_len / self.average_length)
+            score += idf * (tf * (k1 + 1) / denom)
+        return score
+
+
+_knowledge_lock = threading.Lock()
+_knowledge_cache: KnowledgeBase | None = None
+_knowledge_cache_key: tuple[str, int] | None = None
+
+
+def knowledge_enabled() -> bool:
+    return os.getenv("LINE_KNOWLEDGE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def knowledge_dir() -> Path:
+    return Path(os.getenv("LINE_KNOWLEDGE_DIR", DEFAULT_KNOWLEDGE_DIR)).expanduser()
+
+
+def load_knowledge_base() -> KnowledgeBase | None:
+    if not knowledge_enabled():
+        return None
+    root = knowledge_dir()
+    chunk_chars = int(os.getenv("LINE_KNOWLEDGE_CHUNK_CHARS", "1800"))
+    if not root.exists():
+        return None
+
+    global _knowledge_cache, _knowledge_cache_key
+    cache_key = (str(root), chunk_chars)
+    if _knowledge_cache and _knowledge_cache_key == cache_key:
+        return _knowledge_cache
+    with _knowledge_lock:
+        if _knowledge_cache and _knowledge_cache_key == cache_key:
+            return _knowledge_cache
+        _knowledge_cache = KnowledgeBase(root, chunk_chars=chunk_chars)
+        _knowledge_cache_key = cache_key
+        return _knowledge_cache
+
+
+def search_knowledge(query: str) -> list[KnowledgeHit]:
+    kb = load_knowledge_base()
+    if not kb:
+        return []
+    limit = int(os.getenv("LINE_KNOWLEDGE_MAX_SNIPPETS", "3"))
+    excerpt_chars = int(os.getenv("LINE_KNOWLEDGE_EXCERPT_CHARS", "520"))
+    return kb.search(query, limit=limit, excerpt_chars=excerpt_chars)
+
+
+def knowledge_prompt(query: str) -> str:
+    hits = search_knowledge(query)
+    if not hits:
+        return (
+            "\n\n背景知識檢索：沒有找到足夠相關的 ADA Standards of Care 2026 片段。"
+            "\n回答時請只給一般衛教原則，並說明需要醫療團隊依個人狀況判斷。"
+        )
+
+    lines = [
+        "\n\n背景知識檢索：以下為本次問題相關的 ADA Standards of Care in Diabetes 2026 片段。",
+        "使用方式：只把片段當作衛教背景，不要逐字大段引用；若片段不足以回答，請明確說資料不足。",
+    ]
+    for index, hit in enumerate(hits, start=1):
+        lines.extend(
+            [
+                f"\n[{index}] {hit.title}",
+                f"來源檔案：{hit.source}",
+                f"章節：{hit.section}",
+                f"片段：{hit.excerpt}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def knowledge_status() -> dict[str, object]:
+    kb = load_knowledge_base()
+    root = knowledge_dir()
+    return {
+        "enabled": knowledge_enabled(),
+        "dir": str(root),
+        "available": bool(kb),
+        "chunks": len(kb.chunks) if kb else 0,
+        "files": len(list(root.glob("*.md"))) if root.exists() else 0,
+    }
+
+
+def tokenize(text: str) -> Iterable[str]:
+    for token in TOKEN_RE.findall(text.lower()):
+        token = token.strip()
+        if len(token) <= 1 and not token.isdigit() and not re.match(r"[\u4e00-\u9fff]", token):
+            continue
+        yield token
+
+
+def expand_query_tokens(query: str) -> Iterable[str]:
+    yielded: set[str] = set()
+    expanded = [query]
+    for key, terms in QUERY_EXPANSIONS.items():
+        if key in query:
+            expanded.extend(terms)
+    for token in tokenize(" ".join(expanded)):
+        if token not in yielded:
+            yielded.add(token)
+            yield token
+
+
+def normalize_heading(value: str) -> str:
+    value = re.sub(r"\s+", " ", value)
+    return value.replace("*", "").replace("_", "").strip()
+
+
+def best_excerpt(text: str, query_tokens: list[str], max_chars: int) -> str:
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= max_chars:
+        return compact
+
+    lowered = compact.lower()
+    positions = [lowered.find(token.lower()) for token in query_tokens if lowered.find(token.lower()) >= 0]
+    center = min(positions) if positions else 0
+    start = max(0, center - max_chars // 3)
+    end = min(len(compact), start + max_chars)
+    start = max(0, end - max_chars)
+    excerpt = compact[start:end].strip()
+    if start > 0:
+        excerpt = "..." + excerpt
+    if end < len(compact):
+        excerpt += "..."
+    return excerpt
+
+
+def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
+    haystack = f"{chunk.source} {chunk.title} {chunk.section}".lower()
+    adjustment = 1.0
+
+    if "住院" not in query and "hospital" in haystack:
+        adjustment *= 0.55
+    if ("兒童" not in query and "青少年" not in query and "孩子" not in query) and (
+        "children" in haystack or "adolescents" in haystack
+    ):
+        adjustment *= 0.7
+    if "懷孕" not in query and "妊娠" not in query and "孕" not in query and "pregnancy" in haystack:
+        adjustment *= 0.7
+
+    if "低血糖" in query and ("dc26s006" in haystack or "hypoglycemia" in haystack):
+        adjustment *= 1.45
+    if ("飲食" in query or "吃" in query or "飯" in query) and (
+        "dc26s005" in haystack
+        or "eating patterns" in haystack
+        or "meal planning" in haystack
+        or "nutrition therapy" in haystack
+    ):
+        adjustment *= 1.6
+    if ("腎" in query or "尿蛋白" in query) and ("dc26s011" in haystack or "kidney" in haystack):
+        adjustment *= 1.5
+    if ("眼" in query or "視網膜" in query) and ("retinopathy" in haystack or "dc26s012" in haystack):
+        adjustment *= 1.4
+    if ("腳" in query or "足" in query) and ("foot" in haystack or "neuropathy" in haystack):
+        adjustment *= 1.35
+    if ("懷孕" in query or "妊娠" in query or "孕" in query) and ("dc26s015" in haystack or "pregnancy" in haystack):
+        adjustment *= 1.6
+
+    return adjustment
