@@ -28,25 +28,25 @@ DATABASE_URL=postgresql://...
 preview model name, set `GEMINI_MODEL` to the new model name in Zeabur without
 changing the code.
 
-## LINE User Memory
+## LINE User Name Memory
 
-The webhook can remember basic per-user preferences by LINE `source.userId`.
+The webhook can remember one display name per LINE `source.userId`.
 Use PostgreSQL in Zeabur by adding a PostgreSQL service and exposing
 `DATABASE_URL` to this service.
 
 Supported user commands:
 
 ```text
+我叫小明
 請記住我叫小明
-請記住我想多看飲食控制的衛教
-我有哪些資料被記住？
-忘記我的資料
+你記得我的名字嗎？
+忘記我的名字
 ```
 
-The bot only saves memory after explicit "記住" style commands. It does not save
-sensitive details such as blood glucose values, medication, addresses, phone
-numbers, or medical records. If `DATABASE_URL` is not set, the service falls
-back to SQLite at `LINE_MEMORY_DB` for local testing.
+The bot only saves the user's display name/call name. It does not save diabetes
+preferences, blood glucose values, medication, addresses, phone numbers, or
+medical records. If `DATABASE_URL` is not set, the service falls back to SQLite
+at `LINE_MEMORY_DB` for local testing.
 
 ## LINE Webhook URL
 

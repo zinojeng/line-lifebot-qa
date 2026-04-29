@@ -25,7 +25,6 @@ GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "20"))
 LINE_TIMEOUT = int(os.getenv("LINE_TIMEOUT", "12"))
 LINE_MEMORY_ENABLED = os.getenv("LINE_MEMORY_ENABLED", "1").strip() != "0"
 LINE_MEMORY_DB = os.getenv("LINE_MEMORY_DB", "/tmp/line_lifebot_memory.sqlite3")
-LINE_MEMORY_MAX_CHARS = int(os.getenv("LINE_MEMORY_MAX_CHARS", "1200"))
 
 app = FastAPI(title="LifeBot Fast LINE QA")
 
@@ -151,28 +150,16 @@ def delete_user_memory(line_user_id: str) -> None:
 
 def clean_memory_text(value: str) -> str:
     value = re.sub(r"\s+", " ", value).strip(" ，。,.！!？?")
-    return value[:300]
+    return value[:20]
 
 
-def merge_profile_summary(existing: str | None, note: str | None) -> str | None:
-    note = clean_memory_text(note or "")
-    if not note:
-        return existing
-    existing = clean_memory_text(existing or "")
-    if not existing:
-        return note[:LINE_MEMORY_MAX_CHARS]
-    if note in existing:
-        return existing[:LINE_MEMORY_MAX_CHARS]
-    return f"{existing}；{note}"[:LINE_MEMORY_MAX_CHARS]
-
-
-def save_user_memory(line_user_id: str, display_name: str | None = None, profile_note: str | None = None) -> None:
+def save_user_name(line_user_id: str, display_name: str) -> None:
     if not LINE_MEMORY_ENABLED or not line_user_id:
         return
     ensure_memory_db()
-    current = fetch_user_memory(line_user_id) or {}
-    display_name = clean_memory_text(display_name or current.get("display_name") or "") or None
-    profile_summary = merge_profile_summary(current.get("profile_summary"), profile_note)
+    display_name = clean_memory_text(display_name)
+    if not display_name:
+        return
     with memory_connection() as conn:
         if memory_backend() == "postgres":
             conn.execute(
@@ -181,11 +168,11 @@ def save_user_memory(line_user_id: str, display_name: str | None = None, profile
                 VALUES (%s, %s, %s, TRUE, CURRENT_TIMESTAMP)
                 ON CONFLICT (line_user_id) DO UPDATE SET
                     display_name = EXCLUDED.display_name,
-                    profile_summary = EXCLUDED.profile_summary,
+                    profile_summary = NULL,
                     consent_memory = TRUE,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (line_user_id, display_name, profile_summary),
+                (line_user_id, display_name, None),
             )
         else:
             conn.execute(
@@ -194,11 +181,11 @@ def save_user_memory(line_user_id: str, display_name: str | None = None, profile
                 VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
                 ON CONFLICT(line_user_id) DO UPDATE SET
                     display_name = excluded.display_name,
-                    profile_summary = excluded.profile_summary,
+                    profile_summary = NULL,
                     consent_memory = 1,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (line_user_id, display_name, profile_summary),
+                (line_user_id, display_name, None),
             )
 
 
@@ -209,42 +196,17 @@ def memory_prompt(line_user_id: str) -> str:
     parts = []
     if memory.get("display_name"):
         parts.append(f"稱呼：{memory['display_name']}")
-    if memory.get("profile_summary"):
-        parts.append(f"偏好或基本資料：{memory['profile_summary']}")
     if not parts:
         return ""
-    return "\n\n使用者已明確同意保存的基本記憶：\n" + "\n".join(f"- {part}" for part in parts) + (
-        "\n回答時可以自然運用這些資料，例如稱呼或調整衛教方向；不要主動揭露 LINE userId，也不要假裝知道未保存的個資。"
+    return "\n\n使用者已明確同意保存的稱呼：\n" + "\n".join(f"- {part}" for part in parts) + (
+        "\n回答時可以自然用這個稱呼；不要主動揭露 LINE userId，也不要假裝知道未保存的個資。"
     )
-
-
-def is_sensitive_memory(text: str) -> bool:
-    sensitive_terms = [
-        "身分證",
-        "電話",
-        "手機",
-        "地址",
-        "生日",
-        "病歷",
-        "診斷",
-        "用藥",
-        "藥名",
-        "劑量",
-        "胰島素",
-        "血糖",
-        "糖化血色素",
-        "hba1c",
-        "腎功能",
-        "懷孕",
-        "過敏",
-    ]
-    lowered = text.lower()
-    return any(term in lowered for term in sensitive_terms)
 
 
 def extract_display_name(text: str) -> str | None:
     patterns = [
         r"(?:請|幫我)?記住(?:我)?(?:叫|名字是|姓名是)\s*([^\s，。,.！!？?]{1,20})",
+        r"(?:我叫|我的名字是|我的姓名是)\s*([^\s，。,.！!？?]{1,20})",
         r"(?:以後|下次)(?:請)?(?:叫我|稱呼我)\s*([^\s，。,.！!？?]{1,20})",
         r"你可以叫我\s*([^\s，。,.！!？?]{1,20})",
     ]
@@ -255,48 +217,26 @@ def extract_display_name(text: str) -> str | None:
     return None
 
 
-def extract_profile_note(text: str) -> str | None:
-    note = re.sub(r"^(請|幫我)?記住", "", text).strip()
-    note = re.sub(r"^(一下|這件事|：|:)", "", note).strip()
-    if not note or extract_display_name(text):
-        return None
-    return f"使用者希望我記住：{clean_memory_text(note)}"
-
-
 def memory_command_response(line_user_id: str, user_text: str) -> str | None:
     if not LINE_MEMORY_ENABLED:
         return None
 
-    if re.search(r"(忘記|刪除|清除).*(我的)?(資料|記憶)|不要再記住我", user_text):
+    if re.search(r"(忘記|刪除|清除).*(我的)?(名字|稱呼|資料|記憶)|不要再記住我", user_text):
         delete_user_memory(line_user_id)
-        return "我已經刪除目前為你保存的記憶資料。之後如果你希望我再記住稱呼或偏好，可以再明確告訴我。"
+        return "我已經刪除目前為你保存的稱呼。之後如果你希望我再記住名字，可以再告訴我。"
 
-    if re.search(r"(你記得我什麼|我有哪些資料被記住|查詢.*(資料|記憶)|看.*我的記憶)", user_text):
+    if re.search(r"(你記得我什麼|我有哪些資料被記住|查詢.*(名字|稱呼|資料|記憶)|看.*我的記憶|你記得我的名字嗎)", user_text):
         memory = fetch_user_memory(line_user_id)
-        if not memory or not memory.get("consent_memory"):
-            return "目前我沒有為你保存任何長期記憶。若你希望我記住稱呼或衛教偏好，可以說：請記住我叫小明。"
-        details = []
-        if memory.get("display_name"):
-            details.append(f"稱呼：{memory['display_name']}")
-        if memory.get("profile_summary"):
-            details.append(f"偏好或基本資料：{memory['profile_summary']}")
-        return "目前我為你保存的資料是：\n" + "\n".join(details or ["沒有具體內容。"])
-
-    if not re.search(r"(請|幫我)?記住|以後.*(叫我|稱呼我)|下次.*(叫我|稱呼我)|你可以叫我", user_text):
-        return None
-
-    if is_sensitive_memory(user_text):
-        return "為了保護隱私，我暫時不保存血糖、用藥、病歷、電話、地址等敏感資料。可以幫你記住稱呼或一般衛教偏好，例如：請記住我想多看飲食控制的衛教。"
+        if not memory or not memory.get("consent_memory") or not memory.get("display_name"):
+            return "目前我還沒有記住你的名字。你可以說：我叫小明。"
+        return f"我目前記得你的稱呼是：{memory['display_name']}。"
 
     display_name = extract_display_name(user_text)
-    profile_note = extract_profile_note(user_text)
-    if not display_name and not profile_note:
-        return "可以，我能記住稱呼或一般衛教偏好。請用這樣的方式告訴我：請記住我叫小明。"
+    if not display_name:
+        return None
 
-    save_user_memory(line_user_id, display_name=display_name, profile_note=profile_note)
-    if display_name:
-        return f"好的，我記住了。之後我會用「{display_name}」來稱呼你。你也可以隨時說「忘記我的資料」來刪除。"
-    return "好的，我已記住這個一般偏好。你也可以隨時說「我有哪些資料被記住？」或「忘記我的資料」。"
+    save_user_name(line_user_id, display_name)
+    return f"好的，我記住了。之後我會用「{display_name}」來稱呼你。你也可以隨時說「忘記我的名字」來刪除。"
 
 
 def verify_line_signature(body: bytes, signature: str) -> None:
