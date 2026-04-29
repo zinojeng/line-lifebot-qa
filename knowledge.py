@@ -10,6 +10,10 @@ from typing import Iterable
 
 
 DEFAULT_KNOWLEDGE_DIR = os.getenv("LINE_KNOWLEDGE_DIR", "/app/data/adaguidelines")
+DEFAULT_EXTRA_KNOWLEDGE_PATHS = (
+    "/app/data/AACE 2026.md,"
+    "/app/data/KDIGO-2026-Diabetes-and-CKD-Guideline-Update-Public-Review-Draft-March-2026.md"
+)
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+-]*|\d+(?:\.\d+)?|[\u4e00-\u9fff]{1,4}")
 HEADING_RE = re.compile(r"^#{1,4}\s+(.+)$")
@@ -53,6 +57,7 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
 @dataclass(frozen=True)
 class KnowledgeChunk:
     source: str
+    source_label: str
     title: str
     section: str
     text: str
@@ -62,6 +67,7 @@ class KnowledgeChunk:
 @dataclass(frozen=True)
 class KnowledgeHit:
     source: str
+    source_label: str
     title: str
     section: str
     excerpt: str
@@ -69,18 +75,22 @@ class KnowledgeHit:
 
 
 class KnowledgeBase:
-    def __init__(self, root: Path, chunk_chars: int = 1800) -> None:
+    def __init__(self, root: Path, extra_paths: list[Path] | None = None, chunk_chars: int = 1800) -> None:
         self.root = root
+        self.extra_paths = extra_paths or []
         self.chunk_chars = chunk_chars
         self.chunks: list[KnowledgeChunk] = []
+        self.source_files: list[Path] = []
         self.document_frequency: dict[str, int] = {}
         self.average_length = 1.0
         self.load()
 
     def load(self) -> None:
         chunks: list[KnowledgeChunk] = []
-        for path in sorted(self.root.glob("*.md")):
+        source_files = knowledge_source_files(self.root, self.extra_paths)
+        for path in source_files:
             chunks.extend(self._chunks_from_file(path))
+        self.source_files = source_files
         self.chunks = chunks
 
         df: dict[str, int] = {}
@@ -96,6 +106,7 @@ class KnowledgeBase:
     def _chunks_from_file(self, path: Path) -> list[KnowledgeChunk]:
         text = path.read_text(encoding="utf-8", errors="ignore")
         title = path.stem
+        source_label = guideline_source_label(path.name)
         current_section = ""
         blocks: list[tuple[str, list[str]]] = []
         section_lines: list[str] = []
@@ -126,7 +137,14 @@ class KnowledgeBase:
                 if size + len(line) > self.chunk_chars and buffer:
                     chunk_text = "\n".join(buffer)
                     chunks.append(
-                        KnowledgeChunk(path.name, title, section or title, chunk_text, tuple(tokenize(chunk_text)))
+                        KnowledgeChunk(
+                            path.name,
+                            source_label,
+                            title,
+                            section or title,
+                            chunk_text,
+                            tuple(tokenize(chunk_text)),
+                        )
                     )
                     buffer = []
                     size = 0
@@ -134,7 +152,9 @@ class KnowledgeBase:
                 size += len(line) + 1
             if buffer:
                 chunk_text = "\n".join(buffer)
-                chunks.append(KnowledgeChunk(path.name, title, section or title, chunk_text, tuple(tokenize(chunk_text))))
+                chunks.append(
+                    KnowledgeChunk(path.name, source_label, title, section or title, chunk_text, tuple(tokenize(chunk_text)))
+                )
         return chunks
 
     def search(self, query: str, limit: int = 3, excerpt_chars: int = 520) -> list[KnowledgeHit]:
@@ -160,6 +180,7 @@ class KnowledgeBase:
             hits.append(
                 KnowledgeHit(
                     source=chunk.source,
+                    source_label=chunk.source_label,
                     title=chunk.title,
                     section=chunk.section,
                     excerpt=best_excerpt(chunk.text, query_tokens, excerpt_chars),
@@ -208,22 +229,59 @@ def knowledge_dir() -> Path:
     return Path(os.getenv("LINE_KNOWLEDGE_DIR", DEFAULT_KNOWLEDGE_DIR)).expanduser()
 
 
+def extra_knowledge_paths() -> list[Path]:
+    raw = os.getenv("LINE_KNOWLEDGE_EXTRA_PATHS")
+    if raw is None:
+        raw = DEFAULT_EXTRA_KNOWLEDGE_PATHS
+    if raw.strip().lower() in {"", "0", "false", "no", "off"}:
+        return []
+    return [Path(part.strip()).expanduser() for part in re.split(r"[,;\n]+", raw) if part.strip()]
+
+
+def knowledge_source_files(root: Path, extra_paths: list[Path]) -> list[Path]:
+    files: list[Path] = []
+    if root.exists():
+        files.extend(sorted(path for path in root.glob("*.md") if path.is_file()))
+    files.extend(path for path in extra_paths if path.exists() and path.is_file())
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in files:
+        key = str(path.resolve()) if path.exists() else str(path)
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path)
+    return deduped
+
+
+def guideline_source_label(source_name: str) -> str:
+    lower = source_name.lower()
+    if "kdigo" in lower:
+        return "KDIGO 2026 Diabetes and CKD Guideline Update Public Review Draft"
+    if "aace" in lower:
+        return "AACE 2026"
+    if "ada" in lower or re.search(r"dc26s\d+", lower):
+        return "ADA Standards of Care in Diabetes 2026"
+    return "本地糖尿病指南知識庫"
+
+
 def load_knowledge_base() -> KnowledgeBase | None:
     if not knowledge_enabled():
         return None
     root = knowledge_dir()
+    extras = extra_knowledge_paths()
     chunk_chars = int(os.getenv("LINE_KNOWLEDGE_CHUNK_CHARS", "1800"))
-    if not root.exists():
+    if not root.exists() and not any(path.exists() for path in extras):
         return None
 
     global _knowledge_cache, _knowledge_cache_key
-    cache_key = (str(root), chunk_chars)
+    cache_key = ("|".join([str(root), *[str(path) for path in extras]]), chunk_chars)
     if _knowledge_cache and _knowledge_cache_key == cache_key:
         return _knowledge_cache
     with _knowledge_lock:
         if _knowledge_cache and _knowledge_cache_key == cache_key:
             return _knowledge_cache
-        _knowledge_cache = KnowledgeBase(root, chunk_chars=chunk_chars)
+        _knowledge_cache = KnowledgeBase(root, extra_paths=extras, chunk_chars=chunk_chars)
         _knowledge_cache_key = cache_key
         return _knowledge_cache
 
@@ -242,7 +300,7 @@ def search_knowledge(query: str) -> list[KnowledgeHit]:
 
 def knowledge_no_answer_text() -> str:
     return (
-        "目前我在 ADA Standards of Care in Diabetes 2026 的知識庫中，找不到足夠直接的依據回答這個問題。"
+        "目前我在已載入的糖尿病指南知識庫中，找不到足夠直接的依據回答這個問題。"
         "為了避免提供不準確的資訊，我先不延伸回答。"
         "若這是個人健康、用藥、急症或檢查判讀問題，請以你的醫療團隊評估為準。"
     )
@@ -259,25 +317,27 @@ def knowledge_prompt(query: str) -> str:
     if not hits:
         if knowledge_strict_enabled():
             return (
-                "\n\n背景知識檢索：沒有找到足夠相關的 ADA Standards of Care in Diabetes 2026 片段。"
+                "\n\n背景知識檢索：沒有找到足夠相關的糖尿病指南片段。"
                 "\n嚴格回答規則：請不要使用模型內建知識、一般醫學常識或推測補完；"
                 f"請只回覆這段文字：{knowledge_no_answer_text()}"
             )
         return (
-            "\n\n背景知識檢索：沒有找到足夠相關的 ADA Standards of Care 2026 片段。"
+            "\n\n背景知識檢索：沒有找到足夠相關的糖尿病指南片段。"
             "\n回答時請只給一般衛教原則，並說明需要醫療團隊依個人狀況判斷。"
         )
 
     lines = [
-        "\n\n背景知識檢索：以下為本次問題相關的 ADA Standards of Care in Diabetes 2026 片段。",
+        "\n\n背景知識檢索：以下為本次問題相關的糖尿病指南片段，可能包含 ADA、AACE 或 KDIGO 等來源。",
         "嚴格回答規則：只能根據以下片段回答；不要使用模型內建知識、一般醫學常識或推測補完。",
-        "若以下片段不足以直接回答使用者問題，請明確說 ADA 片段不足，並停止回答，不要改用其他來源補充。",
-        "回答方式：先用 1 句話直接回答，再用 2 到 4 個重點整理 ADA 片段支持的內容；若有藥物限制或 eGFR 門檻，請清楚列出，但不要提供個人化劑量。",
+        "若以下片段不足以直接回答使用者問題，請明確說指南片段不足，並停止回答，不要改用其他來源補充。",
+        "回答方式：先用 1 句話直接回答，再用 2 到 4 個重點整理指南片段支持的內容；若有藥物限制或 eGFR 門檻，請清楚列出，但不要提供個人化劑量。",
+        "來源標示：回答中請自然標示依據來源，例如「根據 ADA 2026 片段」、「根據 KDIGO 2026 draft 片段」或「根據 AACE 2026 片段」。",
     ]
     for index, hit in enumerate(hits, start=1):
         lines.extend(
             [
                 f"\n[{index}] {hit.title}",
+                f"來源指南：{hit.source_label}",
                 f"來源檔案：{hit.source}",
                 f"章節：{hit.section}",
                 f"片段：{hit.excerpt}",
@@ -289,13 +349,19 @@ def knowledge_prompt(query: str) -> str:
 def knowledge_status() -> dict[str, object]:
     kb = load_knowledge_base()
     root = knowledge_dir()
+    extras = extra_knowledge_paths()
+    extra_existing = [path for path in extras if path.exists() and path.is_file()]
     return {
         "enabled": knowledge_enabled(),
         "dir": str(root),
+        "extra_paths": [str(path) for path in extras],
         "available": bool(kb),
         "strict": knowledge_strict_enabled(),
         "chunks": len(kb.chunks) if kb else 0,
-        "files": len(list(root.glob("*.md"))) if root.exists() else 0,
+        "files": len(kb.source_files) if kb else 0,
+        "dir_files": len(list(root.glob("*.md"))) if root.exists() else 0,
+        "extra_files": len(extra_existing),
+        "sources": sorted({chunk.source_label for chunk in kb.chunks}) if kb else [],
     }
 
 

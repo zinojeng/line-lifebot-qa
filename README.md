@@ -17,7 +17,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
 GEMINI_API_KEY=...
-APP_VERSION=2026-04-30-ada-reasoning-v4
+APP_VERSION=2026-04-30-multi-guideline-v5
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_TIMEOUT=20
 LINE_QUERY_PLANNING_ENABLED=1
@@ -33,6 +33,7 @@ DATABASE_URL=postgresql://...
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
+LINE_KNOWLEDGE_EXTRA_PATHS=/app/data/AACE 2026.md,/app/data/KDIGO-2026-Diabetes-and-CKD-Guideline-Update-Public-Review-Draft-March-2026.md
 LINE_KNOWLEDGE_MAX_SNIPPETS=5
 LINE_KNOWLEDGE_EXCERPT_CHARS=900
 ```
@@ -40,13 +41,14 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-04-30-ada-reasoning-v4
+APP_VERSION=2026-04-30-multi-guideline-v5
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
 LINE_SESSION_SCOPE=user
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
+LINE_KNOWLEDGE_EXTRA_PATHS=/app/data/AACE 2026.md,/app/data/KDIGO-2026-Diabetes-and-CKD-Guideline-Update-Public-Review-Draft-March-2026.md
 LINE_QUERY_PLANNING_ENABLED=1
 LINE_EVIDENCE_REVIEW_ENABLED=1
 ```
@@ -59,14 +61,17 @@ changing the code.
 
 ## Background Knowledge
 
-The webhook loads ADA Standards of Care Markdown files from `LINE_KNOWLEDGE_DIR`
-and performs local file-based retrieval before each Gemini answer. This is meant
-for LINE DM patient-education grounding, not for long-term user memory.
+The webhook loads diabetes guideline Markdown files from `LINE_KNOWLEDGE_DIR`
+plus optional files listed in `LINE_KNOWLEDGE_EXTRA_PATHS`, then performs local
+file-based retrieval before each Gemini answer. This is meant for LINE DM
+patient-education grounding, not for long-term user memory.
 
 Default source inside Zeabur/container:
 
 ```text
 /app/data/adaguidelines
+/app/data/AACE 2026.md
+/app/data/KDIGO-2026-Diabetes-and-CKD-Guideline-Update-Public-Review-Draft-March-2026.md
 ```
 
 Useful settings:
@@ -75,6 +80,7 @@ Useful settings:
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
+LINE_KNOWLEDGE_EXTRA_PATHS=/app/data/AACE 2026.md,/app/data/KDIGO-2026-Diabetes-and-CKD-Guideline-Update-Public-Review-Draft-March-2026.md
 LINE_KNOWLEDGE_CHUNK_CHARS=1800
 LINE_KNOWLEDGE_MAX_SNIPPETS=5
 LINE_KNOWLEDGE_EXCERPT_CHARS=900
@@ -85,20 +91,22 @@ Health check includes `knowledge.available`, `knowledge.files`, and
 For production, make sure you have permission to use the guideline files in this
 kind of application and mount/copy them into the deployed service path.
 
-### Zeabur ADA Knowledge Setup
+### Zeabur Guideline Knowledge Setup
 
-Do not commit the full ADA Markdown files into a public GitHub repo unless you
+Do not commit full guideline Markdown files into a public GitHub repo unless you
 have permission to redistribute them. Recommended deployment:
 
 1. In Zeabur, create or attach a Volume for this service.
 2. Mount it at `/app/data`.
-3. Put the guideline Markdown files under `/app/data/adaguidelines`.
-4. Set:
+3. Put the ADA Markdown files under `/app/data/adaguidelines`.
+4. Put extra guideline files such as AACE or KDIGO directly under `/app/data`.
+5. Set:
 
 ```bash
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
+LINE_KNOWLEDGE_EXTRA_PATHS=/app/data/AACE 2026.md,/app/data/KDIGO-2026-Diabetes-and-CKD-Guideline-Update-Public-Review-Draft-March-2026.md
 ```
 
 After redeploy, `GET /` should show:
@@ -107,7 +115,14 @@ After redeploy, `GET /` should show:
 "knowledge": {
   "enabled": true,
   "available": true,
-  "files": 17
+  "files": 19,
+  "dir_files": 17,
+  "extra_files": 2,
+  "sources": [
+    "AACE 2026",
+    "ADA Standards of Care in Diabetes 2026",
+    "KDIGO 2026 Diabetes and CKD Guideline Update Public Review Draft"
+  ]
 }
 ```
 
@@ -115,14 +130,14 @@ If `available` is `false` or `files` is `0`, the bot is running but the mounted
 guideline folder is still missing or empty.
 
 Strict mode is enabled by default. When `LINE_KNOWLEDGE_STRICT=1`, the bot only
-answers from retrieved ADA guideline snippets. If the ADA knowledge base does
-not contain enough relevant support, it should decline instead of using Gemini's
-general medical knowledge.
+answers from retrieved guideline snippets. If the loaded guideline knowledge
+base does not contain enough relevant support, it should decline instead of
+using Gemini's general medical knowledge.
 
-## ADA Reasoning Flow
+## Guideline Reasoning Flow
 
-The bot uses Gemini for reasoning over the local ADA knowledge base, not as an
-independent medical source.
+The bot uses Gemini for reasoning over the local guideline knowledge base, not
+as an independent medical source.
 
 Default behavior:
 
@@ -134,16 +149,16 @@ LINE_RETRIEVAL_QUERY_MAX_CHARS=1400
 
 Per message, the flow is:
 
-1. Use the current question plus short-term LINE context to create an ADA search
-   query with likely English terms, abbreviations, and section words.
-2. Search the mounted ADA Markdown files.
-3. Ask Gemini to organize only the retrieved ADA snippets into an evidence
-   review.
-4. Generate the final Traditional Chinese LINE answer from the ADA snippets and
-   evidence review.
+1. Use the current question plus short-term LINE context to create a guideline
+   search query with likely English terms, abbreviations, and section words.
+2. Search the mounted ADA, AACE, KDIGO, or other configured Markdown files.
+3. Ask Gemini to organize only the retrieved guideline snippets into an evidence
+   review, including source names.
+4. Generate the final Traditional Chinese LINE answer from the guideline
+   snippets and evidence review.
 
 The final answer prompt still forbids Gemini from using its built-in medical
-knowledge, other guidelines, news, or unsupported inference.
+knowledge, unmounted guidelines, news, or unsupported inference.
 
 ## LINE User Name Memory
 
@@ -235,11 +250,15 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-04-30-ada-reasoning-v4",
+  "app_version": "2026-04-30-multi-guideline-v5",
   "features": {
     "english_name_memory": true,
     "trailing_question_removal": true,
     "short_term_context": true,
+    "guideline_strict_grounding": true,
+    "guideline_query_planning": true,
+    "guideline_evidence_review": true,
+    "multi_guideline_sources": true,
     "ada_strict_grounding": true,
     "ada_query_planning": true,
     "ada_evidence_review": true
