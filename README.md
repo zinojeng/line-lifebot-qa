@@ -32,6 +32,17 @@ LINE_KNOWLEDGE_DIR=/Users/ander/documents/medical/diabetes/adaguidelines
 LINE_KNOWLEDGE_MAX_SNIPPETS=3
 ```
 
+Minimum variables to add or verify in Zeabur:
+
+```bash
+APP_VERSION=2026-04-30-session-context-v2
+LINE_MEMORY_ENABLED=1
+LINE_CONTEXT_ENABLED=1
+LINE_SESSION_SCOPE=user
+```
+
+The same minimal set is also saved in `zeabur.env.example`.
+
 `GOOGLE_API_KEY` is also accepted as a fallback. If Google AI Studio changes the
 preview model name, set `GEMINI_MODEL` to the new model name in Zeabur without
 changing the code.
