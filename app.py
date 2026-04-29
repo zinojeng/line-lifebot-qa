@@ -57,7 +57,7 @@ except ModuleNotFoundError:
 
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-medical-retrieval-v6")
+APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-multi-query-retrieval-v7")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "20"))
 LINE_QUERY_PLANNING_ENABLED = os.getenv("LINE_QUERY_PLANNING_ENABLED", "1").strip().lower() not in {
@@ -639,6 +639,7 @@ def build_retrieval_query(api_key: str, user_text: str, recent_context: str) -> 
         "你不是回答者，也不要提供醫療建議。"
         "你的唯一任務是把 LINE 病友問題轉成糖尿病指南文件檢索查詢，來源可能包含 ADA、AACE、KDIGO。"
         "請根據本次問題與最近對話脈絡，補上可能出現在這些指南文件中的英文術語、縮寫、同義詞與章節詞。"
+        "若問題提到洗腎/透析/腎衰竭與血糖控制目標，請加入 dialysis、kidney failure、glycemic goals、A1C goal、A1C reliability、CGM、BGM、glycated albumin、fructosamine。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"
     )
@@ -681,6 +682,7 @@ def select_guideline_hits(api_key: str, user_text: str, candidates: list[Knowled
         "請特別檢查問題中的所有核心概念是否都有片段支持，例如藥物類別、疾病階段、eGFR 門檻、禁忌或安全限制。"
         "優先選擇 recommendation、treatment、selection、screening、diagnosis、table_row、含 eGFR/threshold/contraindication/avoid/dose 的片段。"
         "若 CKD/eGFR/腎臟問題同時有 KDIGO 與 ADA 相關候選，請優先保留它們；若片段不足以完整回答，answerable 必須是 false。"
+        "若使用者問洗腎/透析時血糖控制目標，但候選片段顯示沒有單一固定數字、需個別化、A1C 在 advanced CKD 較不可靠，並提供 CGM/BGM 或替代指標片段，這種情況可判定 answerable=true，用來回答「指南沒有固定單一目標，應個別化」。"
         "只輸出 JSON，格式：{\"selected_ids\":[1,2,3],\"answerable\":true,\"coverage_gaps\":[\"...\"]}。"
     )
     prompt = (
@@ -748,7 +750,8 @@ def build_evidence_review(api_key: str, user_text: str, knowledge_text: str) -> 
         "1. 可直接回答使用者問題的指南重點；"
         "2. 片段中明確的門檻、限制、藥物例外或安全提醒；"
         "3. 使用者問題中的每個核心概念是否都有片段支持；"
-        "4. 片段不足或不能回答的地方。"
+        "4. 若指南沒有給單一固定數字，但有說明應個別化或 A1C 不可靠，也要明確整理成可回答重點；"
+        "5. 片段不足或不能回答的地方。"
         "最後一行必須寫 ANSWERABLE: yes 或 ANSWERABLE: no。"
     )
     prompt = f"使用者問題：{user_text}\n\n{knowledge_text}\n\n請先整理證據，不要寫給病友看的最終答案。"
@@ -929,6 +932,9 @@ def health() -> dict[str, Any]:
             "source_aware_reranking": True,
             "section_aware_retrieval": True,
             "table_aware_retrieval": True,
+            "multi_query_retrieval": True,
+            "intent_query_variants": True,
+            "metadata_indexing": True,
             "llm_reranker": LINE_LLM_RERANK_ENABLED,
             "coverage_answerability_check": True,
             "ada_strict_grounding": True,

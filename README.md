@@ -17,7 +17,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
 GEMINI_API_KEY=...
-APP_VERSION=2026-04-30-medical-retrieval-v6
+APP_VERSION=2026-04-30-multi-query-retrieval-v7
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_TIMEOUT=20
 LINE_QUERY_PLANNING_ENABLED=1
@@ -45,7 +45,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-04-30-medical-retrieval-v6
+APP_VERSION=2026-04-30-multi-query-retrieval-v7
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
 LINE_SESSION_SCOPE=user
@@ -163,7 +163,8 @@ Per message, the flow is:
 1. Use the current question plus short-term LINE context to create a guideline
    search query with likely English terms, abbreviations, and section words.
 2. Search the mounted ADA, AACE, KDIGO, or other configured Markdown files with
-   source-aware and section-aware scoring.
+   multi-query retrieval, source-aware scoring, section-aware scoring, and
+   indexed metadata such as source, title, section, and table row type.
 3. Split table rows into separate retrievable snippets so medication tables,
    eGFR thresholds, contraindications, and dosing/use considerations can rank
    independently.
@@ -267,7 +268,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-04-30-medical-retrieval-v6",
+  "app_version": "2026-04-30-multi-query-retrieval-v7",
   "features": {
     "english_name_memory": true,
     "trailing_question_removal": true,
@@ -279,6 +280,9 @@ The health check should include:
     "source_aware_reranking": true,
     "section_aware_retrieval": true,
     "table_aware_retrieval": true,
+    "multi_query_retrieval": true,
+    "intent_query_variants": true,
+    "metadata_indexing": true,
     "llm_reranker": true,
     "coverage_answerability_check": true,
     "ada_strict_grounding": true,

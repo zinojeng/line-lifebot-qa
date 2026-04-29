@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 from pathlib import Path
+import hashlib
 import math
 import os
 import re
@@ -23,6 +24,12 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "血糖": ("glucose", "glycemic", "hyperglycemia", "hypoglycemia", "blood glucose"),
     "低血糖": ("hypoglycemia", "glucagon", "level 1", "level 2", "level 3"),
     "高血糖": ("hyperglycemia", "glucose", "DKA", "HHS", "ketone"),
+    "處理": ("treatment", "management", "recommendation", "action", "recheck", "repeat"),
+    "治療": ("treatment", "therapy", "management", "recommendation"),
+    "控制": ("goal", "target", "glycemic goals", "A1C", "blood glucose", "CGM", "BGM", "time in range"),
+    "目標": ("goal", "target", "glycemic goals", "A1C goal", "glucose target", "time in range"),
+    "血糖控制": ("glycemic goals", "glycemic management", "A1C", "CGM", "BGM", "time in range"),
+    "血糖控制目標": ("glycemic goals", "A1C goal", "glucose target", "CGM metrics", "time in range"),
     "酮酸": ("ketoacidosis", "DKA", "ketone"),
     "飯": ("meal", "nutrition", "postprandial", "carbohydrate"),
     "飲食": ("nutrition", "diet", "medical nutrition therapy", "carbohydrate", "meal"),
@@ -33,9 +40,37 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "腎絲球": ("eGFR", "estimated glomerular filtration rate", "GFR", "kidney function"),
     "過濾率": ("eGFR", "estimated glomerular filtration rate", "GFR", "kidney function"),
     "腎病變": ("CKD", "chronic kidney disease", "kidney outcomes", "albuminuria", "eGFR"),
-    "腎衰竭": ("kidney failure", "advanced CKD", "stage G5", "dialysis", "eGFR"),
-    "洗腎": ("dialysis", "kidney failure", "stage G5"),
-    "透析": ("dialysis", "kidney failure", "stage G5"),
+    "腎衰竭": (
+        "kidney failure",
+        "advanced CKD",
+        "stage G5",
+        "dialysis",
+        "eGFR",
+        "glycemic goals",
+        "A1C less reliable",
+    ),
+    "洗腎": (
+        "dialysis",
+        "kidney failure",
+        "stage G5",
+        "glycemic goals",
+        "A1C less reliable",
+        "glycated albumin",
+        "fructosamine",
+        "CGM",
+        "BGM",
+    ),
+    "透析": (
+        "dialysis",
+        "kidney failure",
+        "stage G5",
+        "glycemic goals",
+        "A1C less reliable",
+        "glycated albumin",
+        "fructosamine",
+        "CGM",
+        "BGM",
+    ),
     "GLP": ("GLP-1", "GLP-1 RA", "glucagon-like peptide 1 receptor agonist", "semaglutide"),
     "眼": ("retinopathy", "eye", "ophthalmologist", "retinal"),
     "腳": ("foot", "neuropathy", "ulcer", "podiatrist"),
@@ -43,16 +78,148 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "血壓": ("blood pressure", "hypertension"),
     "膽固醇": ("lipid", "cholesterol", "statin", "triglyceride"),
     "懷孕": ("pregnancy", "gestational", "preconception"),
+    "懷孕糖尿病": ("gestational diabetes mellitus", "GDM", "screening", "diagnosis", "OGTT", "24-28 weeks"),
+    "妊娠糖尿病": ("gestational diabetes mellitus", "GDM", "screening", "diagnosis", "OGTT", "24-28 weeks"),
     "兒童": ("children", "adolescents", "pediatric", "youth"),
     "老人": ("older adults", "geriatric", "frailty"),
     "住院": ("hospital", "inpatient", "admission"),
     "篩檢": ("screening", "diagnosis", "A1C", "fasting plasma glucose"),
-    "診斷": ("diagnosis", "classification", "A1C", "OGTT"),
+    "診斷": ("diagnosis", "classification", "A1C", "OGTT", "diagnostic criteria"),
+    "診斷標準": ("diagnostic criteria", "screening", "classification", "A1C", "fasting plasma glucose", "OGTT"),
     "併發症": ("complications", "retinopathy", "kidney", "neuropathy", "cardiovascular"),
     "體重": ("weight", "obesity", "lifestyle", "weight management"),
     "血糖機": ("blood glucose monitoring", "BGM", "glucose meter"),
     "連續血糖": ("continuous glucose monitoring", "CGM"),
 }
+
+QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (
+        ("血糖控制", "控制目標", "血糖目標", "目標", "glycemic goal", "glycemic target", "glucose target"),
+        (
+            "glycemic goals A1C goal setting and modifying glycemic goals individualized goals hypoglycemia risk",
+            "blood glucose target preprandial postprandial time in range CGM metrics BGM",
+        ),
+    ),
+    (
+        ("洗腎", "透析", "腎衰竭", "dialysis", "kidney failure", "stage g5", "eskd", "esrd"),
+        (
+            "dialysis kidney failure advanced CKD stage G5 A1C less reliable glycemic goals",
+            "glycated albumin fructosamine CGM BGM kidney failure dialysis",
+        ),
+    ),
+    (
+        ("腎", "腎絲球", "腎病變", "尿蛋白", "egfr", "ckd", "albuminuria", "uacr"),
+        (
+            "chronic kidney disease CKD eGFR albuminuria UACR kidney outcomes",
+            "SGLT2 GLP-1 RA finerenone kidney cardiovascular risk CKD progression",
+        ),
+    ),
+    (
+        ("藥", "用藥", "glp", "sglt", "胰島素", "insulin", "metformin", "pharmacologic", "medication"),
+        (
+            "pharmacologic treatment medication selection efficacy hypoglycemia risk weight kidney cardiovascular",
+            "dose adjustment contraindication avoid kidney function eGFR treatment plan",
+        ),
+    ),
+    (
+        ("低血糖", "hypoglycemia"),
+        (
+            "hypoglycemia treatment glucose 15 minutes repeat glucagon level 1 level 2 level 3",
+            "hypoglycemia risk assessment impaired awareness high risk CGM",
+        ),
+    ),
+    (
+        ("高血糖", "酮酸", "dka", "hhs", "ketone", "hyperglycemia"),
+        (
+            "hyperglycemic crises DKA HHS ketone diagnosis treatment emergency",
+            "hyperglycemia symptoms insulin fluids ketones hospital",
+        ),
+    ),
+    (
+        ("飲食", "吃", "飯", "營養", "nutrition", "diet", "carbohydrate"),
+        (
+            "medical nutrition therapy eating patterns carbohydrate meal planning protein sodium",
+            "nutrition therapy weight glycemic management cardiovascular kidney disease",
+        ),
+    ),
+    (
+        ("運動", "活動", "exercise", "physical activity"),
+        (
+            "physical activity exercise sedentary time resistance aerobic hypoglycemia prevention",
+            "fitness physical function cardiometabolic health activity recommendations",
+        ),
+    ),
+    (
+        ("眼", "視網膜", "retinopathy", "eye"),
+        (
+            "diabetic retinopathy screening eye examination retinal treatment",
+            "ophthalmologist vision pregnancy retinopathy monitoring",
+        ),
+    ),
+    (
+        ("腳", "足", "神經", "neuropathy", "foot"),
+        (
+            "neuropathy foot care ulcer screening monofilament peripheral arterial disease",
+            "diabetic foot evaluation prevention referral",
+        ),
+    ),
+    (
+        ("心", "血壓", "膽固醇", "cardiovascular", "ascvd", "hypertension", "lipid", "statin"),
+        (
+            "cardiovascular disease ASCVD heart failure blood pressure lipid statin risk management",
+            "hypertension treatment goal cholesterol triglyceride cardiovascular risk",
+        ),
+    ),
+    (
+        ("懷孕", "妊娠", "孕", "pregnancy", "gestational"),
+        (
+            "pregnancy gestational diabetes preconception glycemic goals insulin CGM",
+            "management of diabetes in pregnancy screening diagnosis postpartum",
+        ),
+    ),
+    (
+        ("兒童", "青少年", "孩子", "children", "adolescents", "youth"),
+        (
+            "children adolescents pediatric youth type 1 type 2 diabetes management screening",
+            "school technology hypoglycemia growth puberty glycemic goals",
+        ),
+    ),
+    (
+        ("老人", "長者", "older", "geriatric", "frailty"),
+        (
+            "older adults treatment goals frailty hypoglycemia cognitive impairment deintensification",
+            "older adults A1C goal CGM BGM complex health status",
+        ),
+    ),
+    (
+        ("住院", "hospital", "inpatient"),
+        (
+            "hospital inpatient glycemic management insulin hypoglycemia hyperglycemia perioperative",
+            "hospital care glucose target critical illness noncritical illness",
+        ),
+    ),
+    (
+        ("診斷", "篩檢", "diagnosis", "screening", "a1c", "ogtt"),
+        (
+            "diagnosis classification screening A1C fasting plasma glucose OGTT criteria",
+            "prediabetes type 1 type 2 gestational diabetes screening diagnostic criteria",
+        ),
+    ),
+    (
+        ("血糖機", "連續血糖", "cgm", "bgm", "glucose monitoring", "technology"),
+        (
+            "diabetes technology CGM BGM time in range time below range time above range",
+            "blood glucose monitoring continuous glucose monitoring accuracy interference",
+        ),
+    ),
+    (
+        ("體重", "肥胖", "減重", "weight", "obesity"),
+        (
+            "obesity weight management lifestyle pharmacotherapy metabolic surgery diabetes",
+            "GLP-1 dual GIP GLP-1 weight loss obesity treatment",
+        ),
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -147,7 +314,7 @@ class KnowledgeBase:
                             section or title,
                             "text",
                             chunk_text,
-                            tuple(tokenize(chunk_text)),
+                            chunk_tokens(source_label, title, section or title, "text", chunk_text),
                         )
                     )
                     buffer = []
@@ -164,7 +331,7 @@ class KnowledgeBase:
                         section or title,
                         "text",
                         chunk_text,
-                        tuple(tokenize(chunk_text)),
+                        chunk_tokens(source_label, title, section or title, "text", chunk_text),
                     )
                 )
             chunks.extend(table_chunks_from_lines(path.name, source_label, title, section or title, lines))
@@ -184,9 +351,9 @@ class KnowledgeBase:
         scored.sort(key=lambda item: item[0], reverse=True)
 
         hits: list[KnowledgeHit] = []
-        seen_sources: set[tuple[str, str]] = set()
+        seen_sources: set[tuple[str, ...]] = set()
         for score, chunk in scored:
-            key = (chunk.source, chunk.section)
+            key = chunk_dedup_key(chunk)
             if key in seen_sources:
                 continue
             seen_sources.add(key)
@@ -204,6 +371,28 @@ class KnowledgeBase:
             if len(hits) >= limit:
                 break
         return hits
+
+    def search_multi(self, query: str, limit: int = 3, excerpt_chars: int = 520) -> list[KnowledgeHit]:
+        variants = query_variants(query)
+        candidates: dict[tuple[str, ...], KnowledgeHit] = {}
+        for variant_index, variant in enumerate(variants):
+            variant_limit = max(limit * 2, limit + 8)
+            variant_weight = 1.0 if variant_index == 0 else 0.82
+            for rank, hit in enumerate(self.search(variant, limit=variant_limit, excerpt_chars=excerpt_chars), start=1):
+                key = hit_dedup_key(hit)
+                fused_score = hit.score * variant_weight + 35.0 / (rank + 1)
+                existing = candidates.get(key)
+                if not existing or fused_score > existing.score:
+                    candidates[key] = KnowledgeHit(
+                        source=hit.source,
+                        source_label=hit.source_label,
+                        title=hit.title,
+                        section=hit.section,
+                        chunk_type=hit.chunk_type,
+                        excerpt=hit.excerpt,
+                        score=fused_score,
+                    )
+        return sorted(candidates.values(), key=lambda hit: hit.score, reverse=True)[:limit]
 
     def _score(self, query_tokens: list[str], chunk: KnowledgeChunk) -> float:
         token_counts: dict[str, int] = {}
@@ -335,7 +524,7 @@ def table_chunks_from_lines(
                     section,
                     "table_row",
                     chunk_text,
-                    tuple(tokenize(chunk_text)),
+                    chunk_tokens(source_label, title, section, "table_row", chunk_text),
                 )
             )
     return chunks
@@ -397,7 +586,7 @@ def search_knowledge(query: str) -> list[KnowledgeHit]:
     if knowledge_strict_enabled():
         limit = max(limit, int(os.getenv("LINE_KNOWLEDGE_STRICT_MIN_SNIPPETS", "5")))
         excerpt_chars = max(excerpt_chars, int(os.getenv("LINE_KNOWLEDGE_STRICT_EXCERPT_CHARS", "900")))
-    return kb.search(query, limit=limit, excerpt_chars=excerpt_chars)
+    return kb.search_multi(query, limit=limit, excerpt_chars=excerpt_chars)
 
 
 def search_knowledge_candidates(query: str) -> list[KnowledgeHit]:
@@ -406,7 +595,7 @@ def search_knowledge_candidates(query: str) -> list[KnowledgeHit]:
         return []
     limit = int(os.getenv("LINE_KNOWLEDGE_CANDIDATE_SNIPPETS", "15"))
     excerpt_chars = int(os.getenv("LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS", "700"))
-    return kb.search(query, limit=limit, excerpt_chars=excerpt_chars)
+    return kb.search_multi(query, limit=limit, excerpt_chars=excerpt_chars)
 
 
 def knowledge_no_answer_text() -> str:
@@ -507,6 +696,78 @@ def tokenize(text: str) -> Iterable[str]:
         yield token
 
 
+def chunk_tokens(source_label: str, title: str, section: str, chunk_type: str, text: str) -> tuple[str, ...]:
+    metadata = f"{source_label} {title} {section} {chunk_type}"
+    return tuple(tokenize(f"{metadata}\n{text}"))
+
+
+def chunk_dedup_key(chunk: KnowledgeChunk) -> tuple[str, ...]:
+    if chunk.chunk_type == "table_row":
+        digest = hashlib.sha1(chunk.text[:500].encode("utf-8", errors="ignore")).hexdigest()[:12]
+        return (chunk.source, chunk.section, chunk.chunk_type, digest)
+    return (chunk.source, chunk.section, chunk.chunk_type)
+
+
+def hit_dedup_key(hit: KnowledgeHit) -> tuple[str, ...]:
+    if hit.chunk_type == "table_row":
+        digest = hashlib.sha1(hit.excerpt[:500].encode("utf-8", errors="ignore")).hexdigest()[:12]
+        return (hit.source, hit.section, hit.chunk_type, digest)
+    return (hit.source, hit.section, hit.chunk_type)
+
+
+def query_variants(query: str) -> list[str]:
+    variants: list[str] = [query]
+    query_lower = query.lower()
+
+    expansion_terms: list[str] = []
+    for key, terms in QUERY_EXPANSIONS.items():
+        if key in query:
+            expansion_terms.extend(terms)
+    if expansion_terms:
+        variants.append(" ".join([query, *dedupe_terms(expansion_terms)]))
+
+    for triggers, intent_queries in QUERY_INTENT_VARIANTS:
+        if any(trigger in query or trigger in query_lower for trigger in triggers):
+            variants.extend(f"{query} {intent_query}" for intent_query in intent_queries)
+
+    pregnancy_query = any(term in query for term in ("懷孕", "妊娠", "孕")) or any(
+        term in query_lower for term in ("pregnancy", "gestational", "gdm")
+    )
+    diagnosis_query = any(term in query for term in ("診斷", "篩檢", "標準")) or any(
+        term in query_lower for term in ("diagnosis", "screening", "criteria", "ogtt")
+    )
+    if pregnancy_query and diagnosis_query:
+        variants.append(
+            f"{query} gestational diabetes mellitus GDM screening diagnosis Table 2.8 one-step two-step OGTT 24-28 weeks fasting 1 h 2 h Carpenter-Coustan IADPSG"
+        )
+
+    if len(variants) == 1:
+        tokens = list(expand_query_tokens(query))
+        if tokens:
+            variants.append(" ".join(tokens))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for variant in variants:
+        compact = re.sub(r"\s+", " ", variant).strip()
+        key = compact.lower()
+        if compact and key not in seen:
+            seen.add(key)
+            deduped.append(compact)
+    return deduped[:8]
+
+
+def dedupe_terms(terms: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for term in terms:
+        key = term.lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            result.append(term)
+    return result
+
+
 def expand_query_tokens(query: str) -> Iterable[str]:
     yielded: set[str] = set()
     expanded = [query]
@@ -598,6 +859,19 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     haystack = f"{chunk.source} {chunk.source_label} {chunk.title} {chunk.section} {chunk.text[:700]}".lower()
     query_lower = query.lower()
     adjustment = 1.0
+    glycemic_goal_query = any(term in query for term in ("血糖控制", "控制目標", "血糖目標", "目標")) or any(
+        term in query_lower for term in ("glycemic goal", "glycemic target", "glucose target", "a1c goal")
+    )
+    dialysis_query = any(term in query for term in ("洗腎", "透析", "腎衰竭")) or any(
+        term in query_lower for term in ("dialysis", "kidney failure", "stage g5", "eskd", "esrd")
+    )
+    pregnancy_diagnosis_query = (
+        any(term in query for term in ("懷孕", "妊娠", "孕"))
+        or any(term in query_lower for term in ("pregnancy", "gestational", "gdm"))
+    ) and (
+        any(term in query for term in ("診斷", "篩檢", "標準"))
+        or any(term in query_lower for term in ("diagnosis", "screening", "criteria", "ogtt"))
+    )
 
     if chunk.chunk_type == "table_row":
         adjustment *= 1.25
@@ -607,6 +881,40 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 1.18
     if re.search(r"\b(egfr|albuminuria|uacr|mg/g|ml/min|contraindicat|avoid|dose|dosage|adjust|threshold|initiat|discontinu)\b", haystack):
         adjustment *= 1.18
+    if glycemic_goal_query and ("glycemic goals" in haystack or "setting and modifying glycemic goals" in haystack):
+        adjustment *= 2.8
+    if glycemic_goal_query and ("dc26s006" in haystack or "glycemic goals, hypoglycemia" in haystack):
+        adjustment *= 1.7
+    if dialysis_query and glycemic_goal_query and (
+        "a1c levels are also less reliable" in haystack
+        or "glycated albumin" in haystack
+        or "fructosamine" in haystack
+        or "prevalent ckd and substantial comorbidity" in haystack
+    ):
+        adjustment *= 3.2
+    if dialysis_query and glycemic_goal_query and "dc26s011" in haystack and "glycemic goals" in haystack:
+        adjustment *= 3.5
+    if pregnancy_diagnosis_query and (
+        "gestational diabetes" in haystack
+        or "gdm" in haystack
+        or "ogtt" in haystack
+        or "diagnosis and classification" in haystack
+    ):
+        adjustment *= 2.8
+    if pregnancy_diagnosis_query and (
+        "dc26s002" in haystack
+        or "table 2.8" in haystack
+        or "screening for and diagnosis of gdm" in haystack
+        or "one-step strategy" in haystack
+        or "two-step strategy" in haystack
+    ):
+        adjustment *= 3.4
+    if pregnancy_diagnosis_query and "preconception" in haystack and "preconception" not in query_lower:
+        adjustment *= 0.25
+    if pregnancy_diagnosis_query and "checklist" in haystack and "checklist" not in query_lower:
+        adjustment *= 0.4
+    if pregnancy_diagnosis_query and "postpartum" in haystack and "postpartum" not in query_lower and "產後" not in query:
+        adjustment *= 0.65
 
     if "住院" not in query and "hospital" in haystack:
         adjustment *= 0.55
@@ -619,6 +927,14 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
 
     if "低血糖" in query and ("dc26s006" in haystack or "hypoglycemia" in haystack):
         adjustment *= 1.45
+    if ("低血糖" in query or "hypoglycemia" in query_lower) and (
+        "hypoglycemia treatment" in haystack
+        or "glucose is the preferred treatment" in haystack
+        or "15 min" in haystack
+        or "glucagon should be prescribed" in haystack
+        or "fast-acting carbohydrates" in haystack
+    ):
+        adjustment *= 2.6
     if ("飲食" in query or "吃" in query or "飯" in query) and (
         "dc26s005" in haystack
         or "eating patterns" in haystack
@@ -638,6 +954,12 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         or "glucose-lowering therapy for people with chronic kidney disease" in haystack
     ):
         adjustment *= 1.45
+    if ("sglt" in query_lower or "sglt2" in query_lower) and ("egfr" in query_lower or "腎" in query) and (
+        "can be initiated if egfr is above 20" in haystack
+        or "glucose-lowering therapy for people with chronic kidney disease" in haystack
+        or "sglt2 inhibitors are recommended" in haystack
+    ):
+        adjustment *= 2.4
     if "glp" in query_lower and (
         "dc26s009" in haystack
         or "dc26s011" in haystack
