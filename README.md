@@ -17,7 +17,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
 GEMINI_API_KEY=...
-APP_VERSION=2026-04-30-session-context-v2
+APP_VERSION=2026-04-30-ada-strict-v3
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_TIMEOUT=20
 LINE_TIMEOUT=12
@@ -28,6 +28,7 @@ LINE_CONTEXT_MAX_MESSAGES=8
 LINE_CONTEXT_TTL_SECONDS=43200
 DATABASE_URL=postgresql://...
 LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
 LINE_KNOWLEDGE_MAX_SNIPPETS=3
 ```
@@ -35,11 +36,12 @@ LINE_KNOWLEDGE_MAX_SNIPPETS=3
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-04-30-session-context-v2
+APP_VERSION=2026-04-30-ada-strict-v3
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
 LINE_SESSION_SCOPE=user
 LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
 ```
 
@@ -65,6 +67,7 @@ Useful settings:
 
 ```bash
 LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
 LINE_KNOWLEDGE_CHUNK_CHARS=1800
 LINE_KNOWLEDGE_MAX_SNIPPETS=3
@@ -88,6 +91,7 @@ have permission to redistribute them. Recommended deployment:
 
 ```bash
 LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
 ```
 
@@ -103,6 +107,11 @@ After redeploy, `GET /` should show:
 
 If `available` is `false` or `files` is `0`, the bot is running but the mounted
 guideline folder is still missing or empty.
+
+Strict mode is enabled by default. When `LINE_KNOWLEDGE_STRICT=1`, the bot only
+answers from retrieved ADA guideline snippets. If the ADA knowledge base does
+not contain enough relevant support, it should decline instead of using Gemini's
+general medical knowledge.
 
 ## LINE User Name Memory
 
@@ -194,11 +203,12 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-04-30-session-context-v2",
+  "app_version": "2026-04-30-ada-strict-v3",
   "features": {
     "english_name_memory": true,
     "trailing_question_removal": true,
-    "short_term_context": true
+    "short_term_context": true,
+    "ada_strict_grounding": true
   }
 }
 ```

@@ -193,6 +193,10 @@ def knowledge_enabled() -> bool:
     return os.getenv("LINE_KNOWLEDGE_ENABLED", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
+def knowledge_strict_enabled() -> bool:
+    return os.getenv("LINE_KNOWLEDGE_STRICT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def knowledge_dir() -> Path:
     return Path(os.getenv("LINE_KNOWLEDGE_DIR", DEFAULT_KNOWLEDGE_DIR)).expanduser()
 
@@ -226,9 +230,29 @@ def search_knowledge(query: str) -> list[KnowledgeHit]:
     return kb.search(query, limit=limit, excerpt_chars=excerpt_chars)
 
 
+def knowledge_no_answer_text() -> str:
+    return (
+        "目前我在 ADA Standards of Care in Diabetes 2026 的知識庫中，找不到足夠直接的依據回答這個問題。"
+        "為了避免提供不準確的資訊，我先不延伸回答。"
+        "若這是個人健康、用藥、急症或檢查判讀問題，請以你的醫療團隊評估為準。"
+    )
+
+
+def knowledge_answerable(query: str) -> bool:
+    if not knowledge_strict_enabled():
+        return True
+    return bool(search_knowledge(query))
+
+
 def knowledge_prompt(query: str) -> str:
     hits = search_knowledge(query)
     if not hits:
+        if knowledge_strict_enabled():
+            return (
+                "\n\n背景知識檢索：沒有找到足夠相關的 ADA Standards of Care in Diabetes 2026 片段。"
+                "\n嚴格回答規則：請不要使用模型內建知識、一般醫學常識或推測補完；"
+                f"請只回覆這段文字：{knowledge_no_answer_text()}"
+            )
         return (
             "\n\n背景知識檢索：沒有找到足夠相關的 ADA Standards of Care 2026 片段。"
             "\n回答時請只給一般衛教原則，並說明需要醫療團隊依個人狀況判斷。"
@@ -236,7 +260,8 @@ def knowledge_prompt(query: str) -> str:
 
     lines = [
         "\n\n背景知識檢索：以下為本次問題相關的 ADA Standards of Care in Diabetes 2026 片段。",
-        "使用方式：只把片段當作衛教背景，不要逐字大段引用；若片段不足以回答，請明確說資料不足。",
+        "嚴格回答規則：只能根據以下片段回答；不要使用模型內建知識、一般醫學常識或推測補完。",
+        "若以下片段不足以直接回答使用者問題，請明確說 ADA 片段不足，並停止回答，不要改用其他來源補充。",
     ]
     for index, hit in enumerate(hits, start=1):
         lines.extend(
@@ -257,6 +282,7 @@ def knowledge_status() -> dict[str, object]:
         "enabled": knowledge_enabled(),
         "dir": str(root),
         "available": bool(kb),
+        "strict": knowledge_strict_enabled(),
         "chunks": len(kb.chunks) if kb else 0,
         "files": len(list(root.glob("*.md"))) if root.exists() else 0,
     }
