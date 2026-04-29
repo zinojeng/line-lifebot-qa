@@ -9,7 +9,7 @@ import threading
 from typing import Iterable
 
 
-DEFAULT_KNOWLEDGE_DIR = "/Users/ander/documents/medical/diabetes/adaguidelines"
+DEFAULT_KNOWLEDGE_DIR = os.getenv("LINE_KNOWLEDGE_DIR", "/tmp/diabetes-knowledge")
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+-]*|\d+(?:\.\d+)?|[\u4e00-\u9fff]{1,4}")
 HEADING_RE = re.compile(r"^#{1,4}\s+(.+)$")
