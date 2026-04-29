@@ -17,7 +17,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
 GEMINI_API_KEY=...
-APP_VERSION=2026-04-30-coverage-retrieval-v8
+APP_VERSION=2026-04-30-threshold-answerability-v9
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_TIMEOUT=20
 LINE_QUERY_PLANNING_ENABLED=1
@@ -45,7 +45,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-04-30-coverage-retrieval-v8
+APP_VERSION=2026-04-30-threshold-answerability-v9
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
 LINE_SESSION_SCOPE=user
@@ -173,9 +173,12 @@ Per message, the flow is:
    repeated snippets from one chapter.
 5. Retrieve a candidate pool, then ask Gemini to rerank only those candidates
    and decide whether the snippets cover all core concepts in the question.
-6. Ask Gemini to organize only the selected guideline snippets into an evidence
+6. Apply a local coverage safety net so a conservative LLM reranker cannot
+   reject an answer when selected snippets already cover required facets such
+   as CKD, medication, and eGFR thresholds.
+7. Ask Gemini to organize only the selected guideline snippets into an evidence
    review, including source names and coverage gaps.
-7. Generate the final Traditional Chinese LINE answer from the guideline
+8. Generate the final Traditional Chinese LINE answer from the guideline
    snippets and evidence review.
 
 The final answer prompt still forbids Gemini from using its built-in medical
@@ -271,7 +274,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-04-30-coverage-retrieval-v8",
+  "app_version": "2026-04-30-threshold-answerability-v9",
   "features": {
     "english_name_memory": true,
     "trailing_question_removal": true,
@@ -288,6 +291,8 @@ The health check should include:
     "metadata_indexing": true,
     "coverage_aware_retrieval": true,
     "mmr_style_diversity": true,
+    "local_coverage_answerability": true,
+    "comparative_threshold_answering": true,
     "llm_reranker": true,
     "coverage_answerability_check": true,
     "ada_strict_grounding": true,

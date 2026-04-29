@@ -25,6 +25,8 @@ try:
         knowledge_no_answer_text,
         knowledge_prompt_from_hits,
         knowledge_status,
+        hit_facets,
+        required_facets,
         search_knowledge_candidates,
     )
 except ModuleNotFoundError:
@@ -55,9 +57,15 @@ except ModuleNotFoundError:
             "error": "knowledge.py not found in deployment",
         }
 
+    def required_facets(query: str) -> set[str]:
+        return set()
+
+    def hit_facets(hit: Any) -> set[str]:
+        return set()
+
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
-APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-coverage-retrieval-v8")
+APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-threshold-answerability-v9")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 GEMINI_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "20"))
 LINE_QUERY_PLANNING_ENABLED = os.getenv("LINE_QUERY_PLANNING_ENABLED", "1").strip().lower() not in {
@@ -669,6 +677,34 @@ def build_retrieval_query(api_key: str, user_text: str, recent_context: str) -> 
     return combined[:LINE_RETRIEVAL_QUERY_MAX_CHARS] or user_text
 
 
+def local_evidence_coverage(user_text: str, hits: list[KnowledgeHit]) -> tuple[bool, str]:
+    required = required_facets(user_text)
+    if not required:
+        return bool(hits), ""
+
+    covered: set[str] = set()
+    for hit in hits:
+        covered.update(hit_facets(hit))
+
+    missing = required - covered
+    if not missing:
+        return True, ""
+
+    return False, "本地檢索仍缺少必要面向：" + ", ".join(sorted(missing))
+
+
+def comparative_threshold_question(user_text: str) -> bool:
+    lower = user_text.lower()
+    has_numeric_threshold = bool(re.search(r"\b\d+(?:\.\d+)?\b", user_text))
+    has_kidney = any(term in user_text for term in ("腎", "腎功能", "腎絲球")) or any(
+        term in lower for term in ("egfr", "ckd", "kidney", "renal")
+    )
+    has_medication = any(term in user_text for term in ("藥", "用藥", "合併")) or any(
+        term in lower for term in ("medication", "pharmacologic", "sglt", "glp", "metformin", "finerenone", "mra")
+    )
+    return has_numeric_threshold and has_kidney and has_medication
+
+
 def select_guideline_hits(api_key: str, user_text: str, candidates: list[KnowledgeHit]) -> tuple[list[KnowledgeHit], bool, str]:
     if not candidates:
         return [], False, "沒有候選片段。"
@@ -683,6 +719,7 @@ def select_guideline_hits(api_key: str, user_text: str, candidates: list[Knowled
         "優先選擇 recommendation、treatment、selection、screening、diagnosis、table_row、含 eGFR/threshold/contraindication/avoid/dose 的片段。"
         "若 CKD/eGFR/腎臟問題同時有 KDIGO 與 ADA 相關候選，請優先保留它們；若片段不足以完整回答，answerable 必須是 false。"
         "若使用者問洗腎/透析時血糖控制目標，但候選片段顯示沒有單一固定數字、需個別化、A1C 在 advanced CKD 較不可靠，並提供 CGM/BGM 或替代指標片段，這種情況可判定 answerable=true，用來回答「指南沒有固定單一目標，應個別化」。"
+        "若使用者問特定 eGFR 數值下的用藥或合併用藥，而候選片段提供 eGFR 起始/使用門檻（例如 ≥20、≥25、≥30）或 CKD glucose-lowering therapy 建議，這可以回答「哪些藥物在此數值下不符合起始條件、哪些需依指南條件評估」，answerable 可為 true；不要因為片段沒有逐字寫出該 exact eGFR 數字就判 false。"
         "只輸出 JSON，格式：{\"selected_ids\":[1,2,3],\"answerable\":true,\"coverage_gaps\":[\"...\"]}。"
     )
     prompt = (
@@ -736,6 +773,22 @@ def select_guideline_hits(api_key: str, user_text: str, candidates: list[Knowled
         coverage_gaps = "；".join(str(gap) for gap in gaps if str(gap).strip())
     else:
         coverage_gaps = str(gaps or "").strip()
+    local_answerable, local_gap = local_evidence_coverage(user_text, selected)
+    if not local_answerable:
+        all_candidates_answerable, all_candidates_gap = local_evidence_coverage(user_text, candidates)
+        if all_candidates_answerable:
+            selected = candidates[:LINE_LLM_RERANK_TOP_K]
+            local_answerable = True
+            coverage_gaps = (coverage_gaps + "；" if coverage_gaps else "") + "LLM reranker 選片漏掉部分必要面向，已改用本地 coverage-aware 候選。"
+        else:
+            coverage_gaps = (coverage_gaps + "；" if coverage_gaps else "") + (local_gap or all_candidates_gap)
+    if comparative_threshold_question(user_text) and local_answerable and not answerable:
+        answerable = True
+        coverage_gaps = (
+            coverage_gaps + "；" if coverage_gaps else ""
+        ) + "候選片段提供 eGFR 門檻，可用來回答此數值下的用藥限制與可評估方向。"
+    if not local_answerable:
+        answerable = False
     return selected, answerable, coverage_gaps
 
 
@@ -751,7 +804,8 @@ def build_evidence_review(api_key: str, user_text: str, knowledge_text: str) -> 
         "2. 片段中明確的門檻、限制、藥物例外或安全提醒；"
         "3. 使用者問題中的每個核心概念是否都有片段支持；"
         "4. 若指南沒有給單一固定數字，但有說明應個別化或 A1C 不可靠，也要明確整理成可回答重點；"
-        "5. 片段不足或不能回答的地方。"
+        "5. 若使用者問特定 eGFR 數值下的用藥，而片段提供藥物的 eGFR 起始/使用門檻，請用比較方式整理哪些不符合門檻、哪些可依指南條件評估；"
+        "6. 片段不足或不能回答的地方。"
         "最後一行必須寫 ANSWERABLE: yes 或 ANSWERABLE: no。"
     )
     prompt = f"使用者問題：{user_text}\n\n{knowledge_text}\n\n請先整理證據，不要寫給病友看的最終答案。"
@@ -937,6 +991,8 @@ def health() -> dict[str, Any]:
             "metadata_indexing": True,
             "coverage_aware_retrieval": True,
             "mmr_style_diversity": True,
+            "local_coverage_answerability": True,
+            "comparative_threshold_answering": True,
             "llm_reranker": LINE_LLM_RERANK_ENABLED,
             "coverage_answerability_check": True,
             "ada_strict_grounding": True,
