@@ -28,7 +28,7 @@ LINE_CONTEXT_MAX_MESSAGES=8
 LINE_CONTEXT_TTL_SECONDS=43200
 DATABASE_URL=postgresql://...
 LINE_KNOWLEDGE_ENABLED=1
-LINE_KNOWLEDGE_DIR=/Users/ander/documents/medical/diabetes/adaguidelines
+LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
 LINE_KNOWLEDGE_MAX_SNIPPETS=3
 ```
 
@@ -39,6 +39,8 @@ APP_VERSION=2026-04-30-session-context-v2
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
 LINE_SESSION_SCOPE=user
+LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
 ```
 
 The same minimal set is also saved in `zeabur.env.example`.
@@ -53,17 +55,17 @@ The webhook loads ADA Standards of Care Markdown files from `LINE_KNOWLEDGE_DIR`
 and performs local file-based retrieval before each Gemini answer. This is meant
 for LINE DM patient-education grounding, not for long-term user memory.
 
-Default source:
+Default source inside Zeabur/container:
 
 ```text
-/Users/ander/documents/medical/diabetes/adaguidelines
+/app/data/adaguidelines
 ```
 
 Useful settings:
 
 ```bash
 LINE_KNOWLEDGE_ENABLED=1
-LINE_KNOWLEDGE_DIR=/Users/ander/documents/medical/diabetes/adaguidelines
+LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
 LINE_KNOWLEDGE_CHUNK_CHARS=1800
 LINE_KNOWLEDGE_MAX_SNIPPETS=3
 LINE_KNOWLEDGE_EXCERPT_CHARS=520
@@ -73,6 +75,34 @@ Health check includes `knowledge.available`, `knowledge.files`, and
 `knowledge.chunks` so deployment can verify the files are mounted correctly.
 For production, make sure you have permission to use the guideline files in this
 kind of application and mount/copy them into the deployed service path.
+
+### Zeabur ADA Knowledge Setup
+
+Do not commit the full ADA Markdown files into a public GitHub repo unless you
+have permission to redistribute them. Recommended deployment:
+
+1. In Zeabur, create or attach a Volume for this service.
+2. Mount it at `/app/data`.
+3. Put the guideline Markdown files under `/app/data/adaguidelines`.
+4. Set:
+
+```bash
+LINE_KNOWLEDGE_ENABLED=1
+LINE_KNOWLEDGE_DIR=/app/data/adaguidelines
+```
+
+After redeploy, `GET /` should show:
+
+```json
+"knowledge": {
+  "enabled": true,
+  "available": true,
+  "files": 17
+}
+```
+
+If `available` is `false` or `files` is `0`, the bot is running but the mounted
+guideline folder is still missing or empty.
 
 ## LINE User Name Memory
 
