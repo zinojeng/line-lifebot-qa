@@ -20,11 +20,33 @@ GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
 GEMINI_TIMEOUT=20
 LINE_TIMEOUT=12
+LINE_MEMORY_ENABLED=1
+DATABASE_URL=postgresql://...
 ```
 
 `GOOGLE_API_KEY` is also accepted as a fallback. If Google AI Studio changes the
 preview model name, set `GEMINI_MODEL` to the new model name in Zeabur without
 changing the code.
+
+## LINE User Memory
+
+The webhook can remember basic per-user preferences by LINE `source.userId`.
+Use PostgreSQL in Zeabur by adding a PostgreSQL service and exposing
+`DATABASE_URL` to this service.
+
+Supported user commands:
+
+```text
+請記住我叫小明
+請記住我想多看飲食控制的衛教
+我有哪些資料被記住？
+忘記我的資料
+```
+
+The bot only saves memory after explicit "記住" style commands. It does not save
+sensitive details such as blood glucose values, medication, addresses, phone
+numbers, or medical records. If `DATABASE_URL` is not set, the service falls
+back to SQLite at `LINE_MEMORY_DB` for local testing.
 
 ## LINE Webhook URL
 
