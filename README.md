@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-01-fast-index-v23
+APP_VERSION=2026-05-01-multi-agent-v24
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -32,9 +32,10 @@ LINE_LONG_CONTEXT_VERIFICATION_ENABLED=1
 LINE_WHOLE_SECTION_CONTEXT_ENABLED=1
 LINE_WHOLE_SECTION_CONTEXT_MAX_SECTIONS=2
 LINE_WHOLE_SECTION_CONTEXT_CHARS=9000
+LINE_MULTI_AGENT_ENABLED=1
 LINE_DEBUG_SEARCH_ENABLED=1
 LINE_DEBUG_SEARCH_MAX_HITS=12
-# Optional: if set, /debug/search requires x-debug-token header.
+# Optional: if set, /debug/search and /debug/regression require x-debug-token header.
 LINE_DEBUG_TOKEN=
 LINE_RETRIEVAL_QUERY_MAX_CHARS=1400
 LINE_TIMEOUT=12
@@ -70,7 +71,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-01-fast-index-v23
+APP_VERSION=2026-05-01-multi-agent-v24
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -88,6 +89,7 @@ LINE_RECURSIVE_COVERAGE_ENABLED=1
 LINE_EVIDENCE_REVIEW_ENABLED=1
 LINE_LONG_CONTEXT_VERIFICATION_ENABLED=1
 LINE_WHOLE_SECTION_CONTEXT_ENABLED=1
+LINE_MULTI_AGENT_ENABLED=1
 LINE_DEBUG_SEARCH_ENABLED=1
 ```
 
@@ -245,21 +247,25 @@ Per message, the flow is:
 7. Retrieve a candidate pool, then ask the configured LLM to rerank only those candidates
    using the clinical intent JSON and decide whether the snippets cover all core
    concepts in the question.
-8. Apply recursive coverage retrieval. If selected hits still miss required
+8. Run the Evidence Coverage Agent to compare required facets with selected
+   snippets, then apply recursive coverage retrieval if selected hits still miss required
    facets, the app runs targeted second-pass searches for likely missing
    sections, tables, thresholds, medications, or special populations.
-9. Apply a local coverage safety net so a conservative LLM reranker cannot
+9. Run the Retrieval Failure Analyzer Agent in debug traces so failed searches
+   explain whether the cause is no candidates, wrong chapter, missing facets,
+   reranker drop, or missing whole-section context.
+10. Apply a local coverage safety net so a conservative LLM reranker cannot
    reject an answer when selected snippets already cover required facets such
    as CKD, medication, and eGFR thresholds.
-10. Ask the configured LLM to organize only the selected guideline snippets into an evidence
+11. Ask the configured LLM to organize only the selected guideline snippets into an evidence
    review, including source names, coverage gaps, and the clinical intent answer strategy.
-11. For broad questions, add whole-section context from the selected guideline
+12. For broad questions, add whole-section context from the selected guideline
     sections, so questions such as "which patients should use CGM?" can include
     the full ADA S7 CGM subsection rather than only isolated table rows.
-12. Run long-context verification over the selected snippets plus parent section
+13. Run long-context verification over the selected snippets plus parent section
     context. If the verifier still finds missing evidence, the app refuses to
     answer rather than filling gaps from model memory.
-13. Generate the final Traditional Chinese LINE answer from the guideline
+14. Generate the final Traditional Chinese LINE answer from the guideline
     snippets, evidence review, and long-context verification.
 
 The final answer prompt still forbids the configured model from using built-in medical
@@ -323,8 +329,17 @@ Use `/debug/search` to inspect why a question can or cannot be answered:
 
 The response includes the retrieval query, query variants, required facets,
 candidate hits, selected hits, recursive coverage notes, whole-section context
-notes, and missing facets. If `LINE_DEBUG_TOKEN` is set, include it as the
+notes, missing facets, Evidence Coverage Agent output, and Retrieval Failure
+Analyzer Agent output. If `LINE_DEBUG_TOKEN` is set, include it as the
 `x-debug-token` header.
+
+Use `/debug/regression` to run the Regression Test Agent over fixed clinical
+retrieval questions:
+
+```text
+/debug/regression
+/debug/regression?llm=true
+```
 
 ## LINE User Name Memory
 
@@ -462,7 +477,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-01-fast-index-v23",
+  "app_version": "2026-05-01-multi-agent-v24",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -472,6 +487,10 @@ The health check should include:
     "guideline_strict_grounding": true,
     "guideline_query_planning": true,
     "clinical_intent_planning": true,
+    "conditional_multi_agent_pipeline": true,
+    "evidence_coverage_agent": true,
+    "retrieval_failure_analyzer_agent": true,
+    "regression_test_agent": true,
     "guideline_evidence_review": true,
     "all_mounted_guideline_sources": true,
     "ada_only_sources": false,
@@ -506,6 +525,7 @@ The health check should include:
     "inverted_index_retrieval": true,
     "long_context_verification": true,
     "debug_search_endpoint": true,
+    "debug_regression_endpoint": true,
     "guideline_strict_grounding_current": true,
     "guideline_query_planning_current": true,
     "guideline_evidence_review_current": true
