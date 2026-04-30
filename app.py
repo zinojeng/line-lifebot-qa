@@ -66,7 +66,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-guideline-hybrid-v16")
+APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-cgm-routing-v17")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -823,7 +823,7 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "不要提供醫療建議，不要回答問題，不要使用模型內建醫學知識下結論。"
         "請輸出 JSON，欄位固定為："
         "clinical_intent, question_type, patient_context, must_retrieve, required_facets, answer_strategy, do_not_answer_with。"
-        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, diagnosis, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context。"
+        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, technology_indication, diagnosis, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
         "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
         "answer_strategy 要明確說明：用檢索到的 eGFR 門檻與使用者 eGFR 數值比較，不需要文件逐字出現 exact eGFR 數字。"
@@ -920,6 +920,7 @@ def local_evidence_coverage(
             "glycemic_target",
             "a1c_reliability",
             "monitoring",
+            "technology_indication",
             "diagnosis",
             "pregnancy",
             "hypoglycemia",
@@ -988,6 +989,7 @@ def recursive_coverage_queries(
         "glycemic_target": f"{user_text} glycemic goals A1C goal individualized target hypoglycemia risk",
         "a1c_reliability": f"{user_text} A1C less reliable advanced CKD dialysis glycated albumin fructosamine CGM BGM",
         "monitoring": f"{user_text} monitoring CGM BGM SMBG time in range follow-up",
+        "technology_indication": f"{user_text} ADA section 7 diabetes technology use of CGM recommended diabetes onset children adolescents adults insulin therapy noninsulin therapies hypoglycemia any diabetes treatment where CGM helps management",
         "diagnosis": f"{user_text} diagnosis screening diagnostic criteria A1C fasting plasma glucose OGTT",
         "pregnancy": f"{user_text} pregnancy gestational diabetes preconception postpartum insulin glycemic goals",
         "hypoglycemia": f"{user_text} hypoglycemia level 1 level 2 level 3 treatment glucagon severe hypoglycemia",

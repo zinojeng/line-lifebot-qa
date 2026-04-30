@@ -67,11 +67,13 @@
     },
     {
       "id": "technology_devices",
-      "triggers": ["科技", "胰島素幫浦", "幫浦", "CGM", "AID", "閉環", "sensor", "pump"],
-      "expansions": ["diabetes technology", "CGM", "continuous glucose monitoring", "BGM", "insulin pump", "CSII", "automated insulin delivery", "AID", "hybrid closed loop", "sensor-augmented pump", "smart insulin pen", "connected insulin pen"],
+      "triggers": ["科技", "新科技", "糖尿病新科技", "連續血糖", "連續血糖監測", "適用哪些病人", "使用對象", "胰島素幫浦", "幫浦", "CGM", "AID", "閉環", "sensor", "pump"],
+      "expansions": ["diabetes technology", "CGM", "continuous glucose monitoring", "continuous glucose monitor", "rtCGM", "isCGM", "BGM", "insulin pump", "CSII", "automated insulin delivery", "AID", "hybrid closed loop", "sensor-augmented pump", "smart insulin pen", "connected insulin pen", "use of CGM is recommended", "diabetes onset", "children adolescents adults", "on insulin therapy", "noninsulin therapies that can cause hypoglycemia", "any diabetes treatment where CGM helps management", "professional CGM", "personal CGM"],
       "variant_queries": [
         "diabetes technology CGM BGM insulin pump automated insulin delivery AID hybrid closed loop",
-        "continuous glucose monitoring sensor smart insulin pen connected insulin pen insulin dosing"
+        "continuous glucose monitoring sensor smart insulin pen connected insulin pen insulin dosing",
+        "use of CGM is recommended at diabetes onset children adolescents adults on insulin therapy noninsulin therapies that can cause hypoglycemia any diabetes treatment where CGM helps management",
+        "personal CGM professional CGM pregnancy type 1 diabetes type 2 diabetes basal insulin noninsulin therapy individual needs preferences"
       ]
     }
   ]

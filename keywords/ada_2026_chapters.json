@@ -58,11 +58,13 @@
     },
     {
       "id": "ada_s007_diabetes_technology",
-      "triggers": ["S7", "section 7", "dc26s007", "糖尿病科技", "連續血糖", "血糖機", "胰島素幫浦", "閉環", "AID", "CGM", "BGM", "pump"],
-      "expansions": ["dc26s007", "section 7", "Diabetes Technology", "CGM", "continuous glucose monitoring", "BGM", "blood glucose monitoring", "insulin pump", "CSII", "automated insulin delivery", "AID", "hybrid closed loop", "smart insulin pen", "connected insulin pen", "digital health"],
+      "triggers": ["S7", "section 7", "dc26s007", "糖尿病科技", "糖尿病新科技", "新科技", "連續血糖", "連續血糖監測", "血糖機", "胰島素幫浦", "閉環", "AID", "CGM", "BGM", "pump", "適用哪些病人", "使用對象"],
+      "expansions": ["dc26s007", "section 7", "Diabetes Technology", "CGM", "continuous glucose monitoring", "continuous glucose monitor", "rtCGM", "isCGM", "BGM", "blood glucose monitoring", "insulin pump", "CSII", "automated insulin delivery", "AID", "hybrid closed loop", "smart insulin pen", "connected insulin pen", "digital health", "use of CGM is recommended", "diabetes onset", "children adolescents adults", "on insulin therapy", "noninsulin therapies that can cause hypoglycemia", "any diabetes treatment where CGM helps management", "periodic use of personal or professional CGM"],
       "variant_queries": [
         "ADA section 7 dc26s007 diabetes technology CGM BGM insulin pump CSII automated insulin delivery AID",
-        "hybrid closed loop smart insulin pen connected insulin pen digital health glucose monitoring"
+        "hybrid closed loop smart insulin pen connected insulin pen digital health glucose monitoring",
+        "ADA recommendation 7.15 use of CGM is recommended at diabetes onset children adolescents adults on insulin therapy noninsulin therapies that can cause hypoglycemia any diabetes treatment where CGM helps management",
+        "ADA section 7 CGM indicated people with diabetes individual circumstances preferences needs pregnancy periodic professional CGM"
       ]
     },
     {

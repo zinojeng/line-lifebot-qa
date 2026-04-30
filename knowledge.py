@@ -104,7 +104,13 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "體重": ("weight", "obesity", "lifestyle", "weight management"),
     "肥胖": ("obesity", "adiposity", "weight management", "anti-obesity medication", "metabolic surgery"),
     "血糖機": ("blood glucose monitoring", "BGM", "glucose meter"),
-    "連續血糖": ("continuous glucose monitoring", "CGM"),
+    "連續血糖": ("continuous glucose monitoring", "continuous glucose monitor", "CGM", "rtCGM", "isCGM"),
+    "連續血糖監測": ("continuous glucose monitoring", "continuous glucose monitor", "CGM", "rtCGM", "isCGM"),
+    "新科技": ("diabetes technology", "CGM", "continuous glucose monitoring", "automated insulin delivery", "AID"),
+    "科技": ("diabetes technology", "CGM", "continuous glucose monitoring", "BGM", "insulin pump", "AID"),
+    "適用": ("recommended", "offered", "indicated", "use of CGM", "on insulin therapy", "individual needs"),
+    "適合": ("recommended", "offered", "indicated", "use of CGM", "on insulin therapy", "individual needs"),
+    "哪些病人": ("people with diabetes", "children adolescents adults", "on insulin therapy", "noninsulin therapies that can cause hypoglycemia", "pregnancy"),
 }
 
 QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
@@ -225,6 +231,8 @@ QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "diabetes technology CGM BGM time in range time below range time above range",
             "blood glucose monitoring continuous glucose monitoring accuracy interference",
+            "Use of continuous glucose monitoring recommendations CGM recommended diabetes onset children adolescents adults insulin therapy noninsulin therapies hypoglycemia",
+            "CGM indicated people with diabetes individual circumstances preferences needs pregnancy periodic professional CGM",
         ),
     ),
     (
@@ -337,7 +345,7 @@ class KnowledgeBase:
                 if current_section and title == path.stem:
                     title = current_section
                 continue
-            if line and not line.startswith("> *") and "Downloaded" not in line:
+            if line and not skippable_guideline_line(line):
                 section_lines.append(line)
         if section_lines:
             blocks.append((current_section, section_lines))
@@ -653,6 +661,14 @@ def is_supported_guideline_file(path: Path) -> bool:
     if lower.startswith("icon") or "/." in str(path):
         return False
     return path.suffix.lower() == ".md"
+
+
+def skippable_guideline_line(line: str) -> bool:
+    if "Downloaded" in line:
+        return True
+    # Keep quoted recommendations such as "> **7.15** ..."; skip only italic
+    # copyright/citation footers that commonly begin with "> *...".
+    return bool(re.match(r"^>\s+\*(?!\*)", line))
 
 
 def guideline_source_label(source_name: str, text: str = "") -> str:
@@ -1046,6 +1062,7 @@ def structured_metadata(
         "retinopathy": r"\bretinopathy|retinal|eye examination\b|視網膜|眼",
         "neuropathy": r"\bneuropathy|monofilament|foot ulcer|foot care\b|神經|足|腳",
         "technology": r"\bcgm|bgm|smbg|time in range|automated insulin delivery\b|連續血糖|血糖機",
+        "technology_indication": r"\b(use of cgm is recommended|recommended at diabetes onset|people with diabetes.*cgm|cgm.*recommended|offered to people with diabetes|on insulin therapy|noninsulin therapies that can cause hypoglycemia|periodic use of personal or professional cgm|individual circumstances preferences needs)\b|適用|適合|哪些病人",
         "diagnosis": r"\bdiagnosis|diagnostic|screening|ogtt|classification|prediabetes\b|診斷|篩檢",
     }
     for tag, pattern in clinical_patterns.items():
@@ -1343,6 +1360,14 @@ def required_facets(query: str) -> set[str]:
         term in lower for term in ("cgm", "bgm", "smbg", "monitoring", "time in range")
     ):
         facets.add("monitoring")
+    if (
+        any(term in query for term in ("連續血糖", "連續血糖監測", "新科技", "科技", "血糖機"))
+        or any(term in lower for term in ("cgm", "continuous glucose", "diabetes technology"))
+    ) and (
+        any(term in query for term in ("適用", "適合", "哪些病人", "哪種病人", "誰可以", "使用對象"))
+        or any(term in lower for term in ("indication", "recommended", "offered", "eligible", "who should"))
+    ):
+        facets.update({"monitoring", "technology_indication"})
     if any(term in query for term in ("藥", "用藥", "胰島素")) or any(
         term in lower for term in ("medication", "pharmacologic", "sglt", "glp", "insulin", "metformin")
     ):
@@ -1390,6 +1415,11 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
         facets.add("a1c_reliability")
     if re.search(r"\b(cgm|bgm|smbg|glucose monitoring|time in range|tir|time below range|time above range)\b", haystack):
         facets.add("monitoring")
+    if re.search(
+        r"\b(use of cgm is recommended|recommended at diabetes onset|offered to people with diabetes|on insulin therapy|noninsulin therapies that can cause hypoglycemia|any diabetes treatment where cgm helps|periodic use of personal or professional cgm|individual circumstances preferences needs)\b",
+        haystack,
+    ):
+        facets.add("technology_indication")
     if re.search(r"\b(sglt2|glp-1|insulin|metformin|finerenone|glucagon|pharmacologic|medication|dose|dosage)\b", haystack):
         facets.add("medication")
     if re.search(r"\b(mg/dl|mmol/l|ml/min|%|threshold|criteria|fasting|1 h|2 h|3 h|≥|<=|<|>)\b", haystack):
@@ -1545,6 +1575,13 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     liver_query = any(term in query for term in ("肝", "脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
         term in query_lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
     )
+    technology_indication_query = (
+        any(term in query for term in ("連續血糖", "連續血糖監測", "新科技", "科技", "血糖機"))
+        or any(term in query_lower for term in ("cgm", "continuous glucose", "diabetes technology"))
+    ) and (
+        any(term in query for term in ("適用", "適合", "哪些病人", "哪種病人", "誰可以", "使用對象"))
+        or any(term in query_lower for term in ("indication", "recommended", "offered", "eligible", "who should"))
+    )
 
     if chunk.chunk_type == "table_row":
         adjustment *= 1.25
@@ -1564,6 +1601,15 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 2.4
     if liver_query and re.search(r"\b(glp-1|pioglitazone|tirzepatide|weight loss|obesity|lifestyle)\b", haystack):
         adjustment *= 1.45
+    if technology_indication_query and ("dc26s007" in haystack or "diabetes technology" in haystack):
+        adjustment *= 3.2
+    if technology_indication_query and re.search(
+        r"\b(7\.15|use of cgm is recommended|recommended at diabetes onset|on insulin therapy|noninsulin therapies that can cause hypoglycemia|any diabetes treatment where cgm helps|periodic use of personal or professional cgm)\b",
+        haystack,
+    ):
+        adjustment *= 2.6
+    if technology_indication_query and re.search(r"\b(cgm metrics|table 6\.2|time in range|tar|tbr|tir)\b", haystack):
+        adjustment *= 0.55
     if glycemic_goal_query and ("glycemic goals" in haystack or "setting and modifying glycemic goals" in haystack):
         adjustment *= 2.8
     if glycemic_goal_query and ("dc26s006" in haystack or "glycemic goals, hypoglycemia" in haystack):
