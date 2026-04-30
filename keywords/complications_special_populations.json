@@ -22,11 +22,12 @@
     },
     {
       "id": "retinopathy_eye",
-      "triggers": ["眼", "視網膜", "眼底", "黃斑", "retinopathy", "macular edema"],
-      "expansions": ["diabetic retinopathy", "retinal photography", "dilated eye examination", "ophthalmologist", "macular edema", "anti-VEGF", "laser photocoagulation", "vitrectomy", "pregnancy retinopathy", "screening interval"],
+      "triggers": ["眼", "視網膜", "視網膜病變", "眼底", "黃斑", "分期", "分級", "retinopathy", "macular edema", "NPDR", "PDR", "DME"],
+      "expansions": ["diabetic retinopathy", "retinal photography", "dilated eye examination", "ophthalmologist", "nonproliferative diabetic retinopathy", "proliferative diabetic retinopathy", "NPDR", "PDR", "diabetic macular edema", "DME", "macular edema", "microaneurysms", "neovascularization", "anti-VEGF", "laser photocoagulation", "panretinal laser photocoagulation", "vitrectomy", "corticosteroid", "pregnancy retinopathy", "screening interval"],
       "variant_queries": [
         "diabetic retinopathy screening dilated eye examination retinal photography ophthalmologist interval",
-        "macular edema anti-VEGF laser photocoagulation vitrectomy pregnancy retinopathy"
+        "diabetic retinopathy staging severity microaneurysms nonproliferative diabetic retinopathy NPDR proliferative diabetic retinopathy PDR diabetic macular edema DME",
+        "macular edema anti-VEGF panretinal laser photocoagulation vitrectomy corticosteroid pregnancy retinopathy emerging therapies"
       ]
     },
     {

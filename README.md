@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-01-debug-section-v18
+APP_VERSION=2026-05-01-concept-routing-v19
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -62,7 +62,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-01-debug-section-v18
+APP_VERSION=2026-05-01-concept-routing-v19
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -218,32 +218,36 @@ Per message, the flow is:
    source-aware scoring, section-aware scoring, and structured metadata tags
    such as source, year, ADA chapter, table row type, CKD/eGFR/UACR, medication,
    MASLD/MASH, pregnancy, older adults, and hospital/perioperative context.
-4. Use parent-child retrieval. Text chunks and table rows rank independently,
+4. Apply clinical concept routing for common medical intents such as staging,
+   treatment, screening, monitoring, indications, retinopathy, neuropathy, foot
+   care, CKD, MASLD/MASH, pregnancy, and diabetes technology. This avoids adding
+   a one-off keyword for every failed user phrase.
+5. Use parent-child retrieval. Text chunks and table rows rank independently,
    but selected hits carry the parent section excerpt so recommendations,
    rationale, table footnotes, and safety limitations are read together.
-5. Merge candidates with source-balanced, coverage-aware, and MMR-style
+6. Merge candidates with source-balanced, coverage-aware, and MMR-style
    selection so KDIGO/AACE snippets are less likely to be crowded out by repeated
    ADA chapter snippets.
    CKD/eGFR/UACR/albuminuria questions additionally boost KDIGO candidates, while
    pharmacologic questions keep AACE/ADA medication context in the candidate set.
-6. Retrieve a candidate pool, then ask the configured LLM to rerank only those candidates
+7. Retrieve a candidate pool, then ask the configured LLM to rerank only those candidates
    using the clinical intent JSON and decide whether the snippets cover all core
    concepts in the question.
-7. Apply recursive coverage retrieval. If selected hits still miss required
+8. Apply recursive coverage retrieval. If selected hits still miss required
    facets, the app runs targeted second-pass searches for likely missing
    sections, tables, thresholds, medications, or special populations.
-8. Apply a local coverage safety net so a conservative LLM reranker cannot
+9. Apply a local coverage safety net so a conservative LLM reranker cannot
    reject an answer when selected snippets already cover required facets such
    as CKD, medication, and eGFR thresholds.
-9. Ask the configured LLM to organize only the selected guideline snippets into an evidence
+10. Ask the configured LLM to organize only the selected guideline snippets into an evidence
    review, including source names, coverage gaps, and the clinical intent answer strategy.
-10. For broad questions, add whole-section context from the selected guideline
+11. For broad questions, add whole-section context from the selected guideline
     sections, so questions such as "which patients should use CGM?" can include
     the full ADA S7 CGM subsection rather than only isolated table rows.
-11. Run long-context verification over the selected snippets plus parent section
+12. Run long-context verification over the selected snippets plus parent section
     context. If the verifier still finds missing evidence, the app refuses to
     answer rather than filling gaps from model memory.
-12. Generate the final Traditional Chinese LINE answer from the guideline
+13. Generate the final Traditional Chinese LINE answer from the guideline
     snippets, evidence review, and long-context verification.
 
 The final answer prompt still forbids the configured model from using built-in medical
@@ -444,7 +448,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-01-debug-section-v18",
+  "app_version": "2026-05-01-concept-routing-v19",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -464,6 +468,7 @@ The health check should include:
     "table_aware_retrieval": true,
     "multi_query_retrieval": true,
     "intent_query_variants": true,
+    "clinical_concept_routing": true,
     "metadata_indexing": true,
     "coverage_aware_retrieval": true,
     "mmr_style_diversity": true,

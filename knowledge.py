@@ -79,6 +79,12 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     ),
     "GLP": ("GLP-1", "GLP-1 RA", "glucagon-like peptide 1 receptor agonist", "semaglutide"),
     "眼": ("retinopathy", "eye", "ophthalmologist", "retinal"),
+    "視網膜": ("diabetic retinopathy", "retinopathy", "retinal", "macular edema", "DME", "PDR", "NPDR"),
+    "視網膜病變": ("diabetic retinopathy", "retinopathy", "nonproliferative diabetic retinopathy", "proliferative diabetic retinopathy", "NPDR", "PDR", "diabetic macular edema", "DME"),
+    "黃斑": ("diabetic macular edema", "DME", "macular edema", "foveal center", "anti-VEGF"),
+    "分期": ("staging", "stage", "severity", "classification", "mild", "moderate", "severe", "nonproliferative", "proliferative"),
+    "分級": ("staging", "stage", "severity", "classification", "mild", "moderate", "severe", "nonproliferative", "proliferative"),
+    "新的治療": ("treatment", "therapy", "intervention", "anti-VEGF", "laser photocoagulation", "vitrectomy", "emerging therapies"),
     "腳": ("foot", "neuropathy", "ulcer", "podiatrist"),
     "心臟": ("cardiovascular", "heart", "ASCVD", "blood pressure", "lipid"),
     "心血管": ("cardiovascular", "ASCVD", "heart failure", "MACE", "cardiorenal"),
@@ -175,6 +181,8 @@ QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "diabetic retinopathy screening eye examination retinal treatment",
             "ophthalmologist vision pregnancy retinopathy monitoring",
+            "diabetic retinopathy staging severity nonproliferative proliferative NPDR PDR diabetic macular edema DME",
+            "retinopathy treatment anti-VEGF panretinal laser photocoagulation vitrectomy macular focal grid photocoagulation corticosteroid",
         ),
     ),
     (
@@ -1114,6 +1122,8 @@ def structured_metadata(
         "children": r"\bchildren|adolescents|youth|pediatric\b|兒童|青少年",
         "hospital": r"\bhospital|inpatient|critical illness|perioperative|surgery\b|住院|手術",
         "retinopathy": r"\bretinopathy|retinal|eye examination\b|視網膜|眼",
+        "retinopathy_staging": r"\b(nonproliferative diabetic retinopathy|proliferative diabetic retinopathy|npdr|pdr|diabetic macular edema|dme|microaneurysms|neovascularization|severity|staging)\b|分期|分級|嚴重度",
+        "retinopathy_treatment": r"\b(anti-vegf|vascular endothelial growth factor|panretinal laser photocoagulation|photocoagulation|vitrectomy|corticosteroid|focal/grid|macular edema treatment|emerging therapies)\b|雷射|注射|治療",
         "neuropathy": r"\bneuropathy|monofilament|foot ulcer|foot care\b|神經|足|腳",
         "technology": r"\bcgm|bgm|smbg|time in range|automated insulin delivery\b|連續血糖|血糖機",
         "technology_indication": r"\b(use of cgm is recommended|recommended at diabetes onset|people with diabetes.*cgm|cgm.*recommended|offered to people with diabetes|on insulin therapy|noninsulin therapies that can cause hypoglycemia|periodic use of personal or professional cgm|individual circumstances preferences needs)\b|適用|適合|哪些病人",
@@ -1216,6 +1226,7 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
         )
 
     variants.extend(coverage_query_variants(query, query_lower))
+    variants.extend(concept_route_variants(query, query_lower))
 
     if len(variants) == 1:
         tokens = list(expand_query_tokens(query))
@@ -1231,6 +1242,64 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
             seen.add(key)
             deduped.append(QueryVariant(variant.label, compact, variant.weight))
     return deduped[:14]
+
+
+def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
+    concepts = query_concepts(query, query_lower)
+    variants: list[QueryVariant] = []
+    if "retinopathy" in concepts:
+        base = (
+            f"{query} ADA section 12 dc26s012 diabetic retinopathy retinopathy "
+            "Retinopathy Neuropathy and Foot Care ophthalmologist retinal disease"
+        )
+        if "staging" in concepts:
+            base += " staging severity microaneurysms nonproliferative diabetic retinopathy NPDR proliferative diabetic retinopathy PDR diabetic macular edema DME"
+        if "treatment" in concepts:
+            base += " treatment anti-VEGF intravitreous injection panretinal laser photocoagulation macular focal grid photocoagulation corticosteroid vitrectomy emerging therapies"
+        variants.append(QueryVariant("concept_retinopathy", base, 0.94))
+    if "neuropathy" in concepts:
+        variants.append(
+            QueryVariant(
+                "concept_neuropathy",
+                f"{query} ADA section 12 dc26s012 diabetic neuropathy peripheral neuropathy autonomic neuropathy pain treatment foot care screening",
+                0.9,
+            )
+        )
+    if "foot_care" in concepts:
+        variants.append(
+            QueryVariant(
+                "concept_foot_care",
+                f"{query} ADA section 12 dc26s012 foot care ulcer monofilament loss of protective sensation PAD wound infection staging treatment",
+                0.9,
+            )
+        )
+    return variants
+
+
+def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
+    lower = query_lower if query_lower is not None else query.lower()
+    concepts: set[str] = set()
+    if any(term in query for term in ("視網膜", "眼底", "黃斑")) or any(
+        term in lower for term in ("retinopathy", "retinal", "macular edema", "dme", "npdr", "pdr")
+    ):
+        concepts.add("retinopathy")
+    if any(term in query for term in ("神經病變", "神經痛", "麻", "刺痛")) or any(
+        term in lower for term in ("neuropathy", "peripheral neuropathy", "autonomic neuropathy")
+    ):
+        concepts.add("neuropathy")
+    if any(term in query for term in ("足部", "腳", "傷口", "潰瘍")) or any(
+        term in lower for term in ("foot", "ulcer", "monofilament", "pad", "wound")
+    ):
+        concepts.add("foot_care")
+    if any(term in query for term in ("分期", "分級", "嚴重度", "第幾期", "程度")) or any(
+        term in lower for term in ("staging", "stage", "severity", "classification", "mild", "moderate", "severe")
+    ):
+        concepts.add("staging")
+    if any(term in query for term in ("治療", "處理", "怎麼辦", "用藥", "手術", "雷射", "注射")) or any(
+        term in lower for term in ("treatment", "therapy", "intervention", "anti-vegf", "photocoagulation", "vitrectomy")
+    ):
+        concepts.add("treatment")
+    return concepts
 
 
 def coverage_query_variants(query: str, query_lower: str) -> list[QueryVariant]:
@@ -1346,6 +1415,8 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
             if selected and all(hit.section != item.section for item in selected):
                 diversity_bonus += 0.08
             redundancy_penalty = 0.0
+            if preferred_source and preferred_source not in hit.source_label.lower():
+                redundancy_penalty += 0.85
             if target_facets and not (facets & target_facets):
                 redundancy_penalty += 0.45
             if target_facets:
@@ -1378,6 +1449,8 @@ def preferred_source_from_query(query: str) -> str:
     if "aace" in lower:
         return "aace"
     if re.search(r"\bada\b|american diabetes association|dc26s", lower):
+        return "ada"
+    if "retinopathy" in query_concepts(query, lower):
         return "ada"
     return ""
 
@@ -1416,6 +1489,7 @@ def source_balanced_hits(hits: list[KnowledgeHit], limit: int) -> list[Knowledge
 
 def required_facets(query: str) -> set[str]:
     lower = query.lower()
+    concepts = query_concepts(query, lower)
     facets: set[str] = set()
     if any(term in query for term in ("洗腎", "透析", "腎衰竭", "腎", "腎絲球")) or any(
         term in lower for term in ("dialysis", "kidney", "ckd", "egfr", "eskd", "esrd")
@@ -1457,6 +1531,10 @@ def required_facets(query: str) -> set[str]:
         term in lower for term in ("foot", "neuropathy", "monofilament", "ulcer")
     ):
         facets.add("foot_care")
+    if "retinopathy" in concepts:
+        facets.add("retinopathy_context")
+    if "staging" in concepts:
+        facets.add("staging")
     if any(term in query for term in ("多久", "幾次", "頻率", "一次", "每年")) or any(
         term in lower for term in ("frequency", "annually", "months", "yearly", "every")
     ):
@@ -1499,6 +1577,10 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
         facets.add("threshold")
     if re.search(r"\b(diagnosis|diagnostic|screening|ogtt|classification|criteria)\b", haystack):
         facets.add("diagnosis")
+    if re.search(r"\b(retinopathy|retinal|macular edema|dme|npdr|pdr|ophthalmologist|anti-vegf|photocoagulation|vitrectomy)\b", haystack):
+        facets.add("retinopathy_context")
+    if re.search(r"\b(staging|stage|severity|classification|mild|moderate|severe|nonproliferative|proliferative|npdr|pdr|microaneurysms|neovascularization)\b", haystack):
+        facets.add("staging")
     if re.search(r"\b(foot|neuropathy|monofilament|ulcer|protective sensation|peripheral artery|pad|lops|podiatrist)\b", haystack):
         facets.add("foot_care")
     if re.search(r"\b(annually|every \d|months?|yearly|frequency|examination frequency|at least yearly)\b", haystack):
@@ -1648,6 +1730,10 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     liver_query = any(term in query for term in ("肝", "脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
         term in query_lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
     )
+    concepts = query_concepts(query, query_lower)
+    retinopathy_query = "retinopathy" in concepts
+    staging_query = "staging" in concepts
+    treatment_query = "treatment" in concepts
     technology_indication_query = (
         any(term in query for term in ("連續血糖", "連續血糖監測", "新科技", "科技", "血糖機"))
         or any(term in query_lower for term in ("cgm", "continuous glucose", "diabetes technology"))
@@ -1689,6 +1775,22 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 2.6
     if technology_indication_query and re.search(r"\b(cgm metrics|table 6\.2|time in range|tar|tbr|tir)\b", haystack):
         adjustment *= 0.55
+    if retinopathy_query and ("dc26s012" in haystack or "retinopathy, neuropathy, and foot care" in haystack):
+        adjustment *= 5.2
+    elif retinopathy_query and ("retinopathy" in haystack or "macular edema" in haystack):
+        adjustment *= 1.25
+    elif retinopathy_query:
+        adjustment *= 0.25
+    if retinopathy_query and staging_query and re.search(
+        r"\b(microaneurysms|nonproliferative|proliferative|npdr|pdr|diabetic macular edema|dme|neovascularization|severity|staging)\b",
+        haystack,
+    ):
+        adjustment *= 2.2
+    if retinopathy_query and treatment_query and re.search(
+        r"\b(anti-vegf|vascular endothelial growth factor|panretinal laser|photocoagulation|vitrectomy|corticosteroid|focal/grid|emerging therapies|aflibercept|ranibizumab)\b",
+        haystack,
+    ):
+        adjustment *= 2.4
     if glycemic_goal_query and ("glycemic goals" in haystack or "setting and modifying glycemic goals" in haystack):
         adjustment *= 2.8
     if glycemic_goal_query and ("dc26s006" in haystack or "glycemic goals, hypoglycemia" in haystack):
