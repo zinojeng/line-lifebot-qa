@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-04-30-kdigo-priority-v15
+APP_VERSION=2026-04-30-guideline-hybrid-v16
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -24,7 +24,11 @@ GEMINI_TIMEOUT=20
 LINE_QUERY_PLANNING_ENABLED=1
 LINE_LLM_RERANK_ENABLED=1
 LINE_LLM_RERANK_TOP_K=5
+LINE_RECURSIVE_COVERAGE_ENABLED=1
+LINE_RECURSIVE_COVERAGE_MAX_QUERIES=4
+LINE_RECURSIVE_COVERAGE_MAX_HITS=4
 LINE_EVIDENCE_REVIEW_ENABLED=1
+LINE_LONG_CONTEXT_VERIFICATION_ENABLED=1
 LINE_RETRIEVAL_QUERY_MAX_CHARS=1400
 LINE_TIMEOUT=12
 LINE_MEMORY_ENABLED=1
@@ -39,6 +43,9 @@ LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/aace,/app/data/kdigo,/app/
 LINE_KNOWLEDGE_DIR=/app/data/guidelines
 LINE_KNOWLEDGE_EXTRA_PATHS=0
 LINE_KNOWLEDGE_PARENT_CONTEXT_CHARS=900
+LINE_KNOWLEDGE_PARENT_SECTION_CHARS=1800
+LINE_KNOWLEDGE_VECTOR_DIM=768
+LINE_KNOWLEDGE_VECTOR_WEIGHT=0.55
 LINE_KNOWLEDGE_CANDIDATE_SNIPPETS=15
 LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS=700
 LINE_KNOWLEDGE_MAX_SNIPPETS=5
@@ -48,7 +55,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-04-30-kdigo-priority-v15
+APP_VERSION=2026-04-30-guideline-hybrid-v16
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -62,7 +69,9 @@ LINE_KNOWLEDGE_DIR=/app/data/guidelines
 LINE_KNOWLEDGE_EXTRA_PATHS=0
 LINE_QUERY_PLANNING_ENABLED=1
 LINE_LLM_RERANK_ENABLED=1
+LINE_RECURSIVE_COVERAGE_ENABLED=1
 LINE_EVIDENCE_REVIEW_ENABLED=1
+LINE_LONG_CONTEXT_VERIFICATION_ENABLED=1
 ```
 
 The same minimal set is also saved in `zeabur.env.example`.
@@ -173,7 +182,11 @@ Default behavior:
 LINE_QUERY_PLANNING_ENABLED=1
 LINE_LLM_RERANK_ENABLED=1
 LINE_LLM_RERANK_TOP_K=5
+LINE_RECURSIVE_COVERAGE_ENABLED=1
+LINE_RECURSIVE_COVERAGE_MAX_QUERIES=4
+LINE_RECURSIVE_COVERAGE_MAX_HITS=4
 LINE_EVIDENCE_REVIEW_ENABLED=1
+LINE_LONG_CONTEXT_VERIFICATION_ENABLED=1
 LINE_RETRIEVAL_QUERY_MAX_CHARS=1400
 LINE_KNOWLEDGE_CANDIDATE_SNIPPETS=15
 LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS=700
@@ -186,13 +199,14 @@ Per message, the flow is:
    must-retrieve topics, and answer strategy.
 2. Use that clinical intent JSON to create a guideline search query with likely
    English terms, abbreviations, section words, and evidence targets.
-3. Search the mounted guideline Markdown files with
-   multi-query retrieval, source-aware scoring, section-aware scoring, and
-   indexed metadata such as source, title, section, and table row type.
-4. Split table rows into separate retrievable snippets and attach parent section
-   context so medication tables, eGFR thresholds, contraindications, footnotes,
-   and dosing/use considerations can rank independently without losing their
-   guideline context.
+3. Search the mounted guideline Markdown files with hierarchical hybrid
+   retrieval: multi-query BM25-style scoring, local hashed vector scoring,
+   source-aware scoring, section-aware scoring, and structured metadata tags
+   such as source, year, ADA chapter, table row type, CKD/eGFR/UACR, medication,
+   MASLD/MASH, pregnancy, older adults, and hospital/perioperative context.
+4. Use parent-child retrieval. Text chunks and table rows rank independently,
+   but selected hits carry the parent section excerpt so recommendations,
+   rationale, table footnotes, and safety limitations are read together.
 5. Merge candidates with source-balanced, coverage-aware, and MMR-style
    selection so KDIGO/AACE snippets are less likely to be crowded out by repeated
    ADA chapter snippets.
@@ -201,13 +215,19 @@ Per message, the flow is:
 6. Retrieve a candidate pool, then ask the configured LLM to rerank only those candidates
    using the clinical intent JSON and decide whether the snippets cover all core
    concepts in the question.
-7. Apply a local coverage safety net so a conservative LLM reranker cannot
+7. Apply recursive coverage retrieval. If selected hits still miss required
+   facets, the app runs targeted second-pass searches for likely missing
+   sections, tables, thresholds, medications, or special populations.
+8. Apply a local coverage safety net so a conservative LLM reranker cannot
    reject an answer when selected snippets already cover required facets such
    as CKD, medication, and eGFR thresholds.
-8. Ask the configured LLM to organize only the selected guideline snippets into an evidence
+9. Ask the configured LLM to organize only the selected guideline snippets into an evidence
    review, including source names, coverage gaps, and the clinical intent answer strategy.
-9. Generate the final Traditional Chinese LINE answer from the guideline
-   snippets and evidence review.
+10. Run long-context verification over the selected snippets plus parent section
+    context. If the verifier still finds missing evidence, the app refuses to
+    answer rather than filling gaps from model memory.
+11. Generate the final Traditional Chinese LINE answer from the guideline
+    snippets, evidence review, and long-context verification.
 
 The final answer prompt still forbids the configured model from using built-in medical
 knowledge, unmounted guidelines, news, or unsupported inference.
@@ -251,8 +271,9 @@ Optional additional keyword files can be mounted with:
 LINE_KEYWORD_PATHS=/app/data/keywords
 ```
 
-The health check reports `knowledge.keyword_files` and
-`knowledge.keyword_entries` so deployment can verify the modules are loaded.
+The health check reports `knowledge.keyword_files`, `knowledge.keyword_entries`,
+`knowledge.metadata_tagged_chunks`, and `knowledge.vector_index_chunks` so
+deployment can verify the modules and hybrid retrieval index are loaded.
 
 ## LINE User Name Memory
 
@@ -390,7 +411,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-04-30-kdigo-priority-v15",
+  "app_version": "2026-04-30-guideline-hybrid-v16",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -420,6 +441,11 @@ The health check should include:
     "llm_reranker": true,
     "coverage_answerability_check": true,
     "parent_child_table_context": true,
+    "parent_child_section_retrieval": true,
+    "structured_metadata_extraction": true,
+    "recursive_coverage_retrieval": true,
+    "local_hashed_vector_index": true,
+    "long_context_verification": true,
     "guideline_strict_grounding_current": true,
     "guideline_query_planning_current": true,
     "guideline_evidence_review_current": true

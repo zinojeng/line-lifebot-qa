@@ -252,6 +252,8 @@ class KnowledgeChunk:
     section: str
     chunk_type: str
     text: str
+    parent_text: str
+    metadata: tuple[str, ...]
     tokens: tuple[str, ...]
 
 
@@ -263,6 +265,8 @@ class KnowledgeHit:
     section: str
     chunk_type: str
     excerpt: str
+    parent_excerpt: str
+    metadata: tuple[str, ...]
     score: float
 
 
@@ -290,6 +294,7 @@ class KnowledgeBase:
         self.chunk_chars = chunk_chars
         self.chunks: list[KnowledgeChunk] = []
         self.source_files: list[Path] = []
+        self.vector_index: list[dict[int, float]] = []
         self.document_frequency: dict[str, int] = {}
         self.average_length = 1.0
         self.load()
@@ -301,6 +306,7 @@ class KnowledgeBase:
             chunks.extend(self._chunks_from_file(path))
         self.source_files = source_files
         self.chunks = chunks
+        self.vector_index = [hashed_vector(chunk.tokens) for chunk in chunks]
 
         df: dict[str, int] = {}
         lengths = []
@@ -340,11 +346,13 @@ class KnowledgeBase:
         for section, lines in blocks:
             if section.lower() in {"references", "reference"}:
                 continue
+            parent_text = "\n".join(lines)
             buffer: list[str] = []
             size = 0
             for line in lines:
                 if size + len(line) > self.chunk_chars and buffer:
                     chunk_text = "\n".join(buffer)
+                    metadata = structured_metadata(source_label, title, section or title, "text", chunk_text, parent_text)
                     chunks.append(
                         KnowledgeChunk(
                             path.name,
@@ -353,7 +361,9 @@ class KnowledgeBase:
                             section or title,
                             "text",
                             chunk_text,
-                            chunk_tokens(source_label, title, section or title, "text", chunk_text),
+                            parent_text,
+                            metadata,
+                            chunk_tokens(source_label, title, section or title, "text", chunk_text, metadata),
                         )
                     )
                     buffer = []
@@ -362,6 +372,7 @@ class KnowledgeBase:
                 size += len(line) + 1
             if buffer:
                 chunk_text = "\n".join(buffer)
+                metadata = structured_metadata(source_label, title, section or title, "text", chunk_text, parent_text)
                 chunks.append(
                     KnowledgeChunk(
                         path.name,
@@ -370,10 +381,12 @@ class KnowledgeBase:
                         section or title,
                         "text",
                         chunk_text,
-                        chunk_tokens(source_label, title, section or title, "text", chunk_text),
+                        parent_text,
+                        metadata,
+                        chunk_tokens(source_label, title, section or title, "text", chunk_text, metadata),
                     )
                 )
-            chunks.extend(table_chunks_from_lines(path.name, source_label, title, section or title, lines))
+            chunks.extend(table_chunks_from_lines(path.name, source_label, title, section or title, lines, parent_text))
         return chunks
 
     def search(self, query: str, limit: int = 3, excerpt_chars: int = 520) -> list[KnowledgeHit]:
@@ -381,9 +394,13 @@ class KnowledgeBase:
         if not query_tokens or not self.chunks:
             return []
 
+        query_vector = hashed_vector(query_tokens)
+        vector_weight = float(os.getenv("LINE_KNOWLEDGE_VECTOR_WEIGHT", "0.55"))
         scored: list[tuple[float, KnowledgeChunk]] = []
-        for chunk in self.chunks:
+        for index, chunk in enumerate(self.chunks):
             score = self._score(query_tokens, chunk)
+            if query_vector and index < len(self.vector_index):
+                score += sparse_cosine(query_vector, self.vector_index[index]) * vector_weight
             score *= domain_adjustment(query, chunk)
             if score > 0:
                 scored.append((score, chunk))
@@ -404,6 +421,8 @@ class KnowledgeBase:
                     section=chunk.section,
                     chunk_type=chunk.chunk_type,
                     excerpt=best_excerpt(chunk.text, query_tokens, excerpt_chars),
+                    parent_excerpt=parent_excerpt_for_chunk(chunk, query_tokens),
+                    metadata=chunk.metadata,
                     score=score,
                 )
             )
@@ -428,6 +447,8 @@ class KnowledgeBase:
                         section=hit.section,
                         chunk_type=hit.chunk_type,
                         excerpt=hit.excerpt,
+                        parent_excerpt=hit.parent_excerpt,
+                        metadata=hit.metadata,
                         score=fused_score,
                     )
         return coverage_rerank_hits(query, list(candidates.values()), limit)
@@ -667,6 +688,7 @@ def table_chunks_from_lines(
     title: str,
     section: str,
     lines: list[str],
+    parent_text: str,
 ) -> list[KnowledgeChunk]:
     chunks: list[KnowledgeChunk] = []
     table_label = ""
@@ -704,6 +726,7 @@ def table_chunks_from_lines(
             chunk_text = prefix + row_text
             if parent_context:
                 chunk_text = f"{chunk_text}\nParent section context: {parent_context}"
+            metadata = structured_metadata(source_label, title, section, "table_row", chunk_text, parent_text)
             chunks.append(
                 KnowledgeChunk(
                     source,
@@ -712,7 +735,9 @@ def table_chunks_from_lines(
                     section,
                     "table_row",
                     chunk_text,
-                    chunk_tokens(source_label, title, section, "table_row", chunk_text),
+                    parent_text,
+                    metadata,
+                    chunk_tokens(source_label, title, section, "table_row", chunk_text, metadata),
                 )
             )
     return chunks
@@ -841,15 +866,19 @@ def knowledge_prompt_from_hits(hits: list[KnowledgeHit]) -> str:
         "來源標示：回答中請自然標示依據來源，例如「根據 ADA 2026 / KDIGO / AACE 片段」；不要編造未出現在片段中的來源。",
     ]
     for index, hit in enumerate(hits, start=1):
+        metadata_line = ", ".join(hit.metadata[:18])
         lines.extend(
             [
                 f"\n[{index}] {public_metadata(hit.title)}",
                 f"來源指南：{hit.source_label}",
                 f"章節：{public_metadata(hit.section)}",
                 f"片段類型：{hit.chunk_type}",
+                f"結構化標籤：{metadata_line or '無'}",
                 f"片段：{hit.excerpt}",
             ]
         )
+        if hit.parent_excerpt and hit.parent_excerpt != hit.excerpt:
+            lines.append(f"父層章節上下文：{hit.parent_excerpt}")
     return "\n".join(lines)
 
 
@@ -860,16 +889,20 @@ def knowledge_candidates_prompt(hits: list[KnowledgeHit]) -> str:
         "\n\n候選指南片段：以下為初步召回的候選片段，請只用來做 rerank/coverage，不可用模型內建知識補充。",
     ]
     for index, hit in enumerate(hits, start=1):
+        metadata_line = ", ".join(hit.metadata[:18])
         lines.extend(
             [
                 f"\n[{index}] {public_metadata(hit.title)}",
                 f"來源指南：{hit.source_label}",
                 f"章節：{public_metadata(hit.section)}",
                 f"片段類型：{hit.chunk_type}",
+                f"結構化標籤：{metadata_line or '無'}",
                 f"召回分數：{hit.score:.2f}",
                 f"片段：{hit.excerpt}",
             ]
         )
+        if hit.parent_excerpt and hit.parent_excerpt != hit.excerpt:
+            lines.append(f"父層章節上下文：{hit.parent_excerpt}")
     return "\n".join(lines)
 
 
@@ -898,6 +931,8 @@ def knowledge_status() -> dict[str, object]:
         "available": bool(kb),
         "strict": knowledge_strict_enabled(),
         "chunks": len(kb.chunks) if kb else 0,
+        "metadata_tagged_chunks": sum(1 for chunk in kb.chunks if chunk.metadata) if kb else 0,
+        "vector_index_chunks": len(kb.vector_index) if kb else 0,
         "files": len(kb.source_files) if kb else 0,
         "dir_files": dir_file_count,
         "extra_files": len(extra_existing),
@@ -917,9 +952,118 @@ def tokenize(text: str) -> Iterable[str]:
         yield token
 
 
-def chunk_tokens(source_label: str, title: str, section: str, chunk_type: str, text: str) -> tuple[str, ...]:
-    metadata = f"{source_label} {title} {section} {chunk_type}"
-    return tuple(tokenize(f"{metadata}\n{text}"))
+def hashed_vector(tokens: Iterable[str]) -> dict[int, float]:
+    dim = max(64, int(os.getenv("LINE_KNOWLEDGE_VECTOR_DIM", "768")))
+    counts: dict[int, float] = {}
+    for token in tokens:
+        value = token.strip().lower()
+        if not value:
+            continue
+        digest = hashlib.blake2b(value.encode("utf-8", errors="ignore"), digest_size=4).digest()
+        bucket = int.from_bytes(digest, "big") % dim
+        counts[bucket] = counts.get(bucket, 0.0) + 1.0
+    norm = math.sqrt(sum(value * value for value in counts.values()))
+    if norm <= 0:
+        return {}
+    return {key: value / norm for key, value in counts.items()}
+
+
+def sparse_cosine(left: dict[int, float], right: dict[int, float]) -> float:
+    if not left or not right:
+        return 0.0
+    if len(left) > len(right):
+        left, right = right, left
+    return sum(value * right.get(key, 0.0) for key, value in left.items())
+
+
+def chunk_tokens(
+    source_label: str,
+    title: str,
+    section: str,
+    chunk_type: str,
+    text: str,
+    metadata: tuple[str, ...] = (),
+) -> tuple[str, ...]:
+    indexed_metadata = f"{source_label} {title} {section} {chunk_type} {' '.join(metadata)}"
+    return tuple(tokenize(f"{indexed_metadata}\n{text}"))
+
+
+def structured_metadata(
+    source_label: str,
+    title: str,
+    section: str,
+    chunk_type: str,
+    text: str,
+    parent_text: str = "",
+) -> tuple[str, ...]:
+    haystack = f"{source_label} {title} {section} {chunk_type} {text} {parent_text[:1400]}".lower()
+    tags: list[str] = []
+
+    if "kdigo" in haystack:
+        tags.append("source:kdigo")
+    elif "aace" in haystack:
+        tags.append("source:aace")
+    elif "ada standards" in haystack or re.search(r"\bdc26s\d+\b", haystack):
+        tags.append("source:ada")
+
+    year_match = re.search(r"\b(20\d{2})\b", haystack)
+    if year_match:
+        tags.append(f"guideline_year:{year_match.group(1)}")
+    chapter_match = re.search(r"\bdc26s(\d{3})\b", haystack)
+    if chapter_match:
+        tags.append(f"ada_chapter:s{int(chapter_match.group(1))}")
+
+    tags.append(f"chunk_type:{chunk_type}")
+    if chunk_type == "table_row" or re.search(r"\btable\s+\d", haystack):
+        tags.append("has_table")
+    if re.search(r"\brecommendations?\b|\*\*\d+\.\d+", haystack):
+        tags.append("has_recommendation")
+    if re.search(r"\b(a|b|c|e)\b\s*$|\*\*[abce]\*\*", text.strip(), flags=re.I):
+        tags.append("has_recommendation_grade")
+    if re.search(r"[<>≤≥=]\s*\d|\b\d+(?:\.\d+)?\s*(?:%|mg/dl|mmol/l|ml/min|mg/g)\b", haystack):
+        tags.append("has_threshold")
+
+    clinical_patterns = {
+        "ckd": r"\b(ckd|chronic kidney disease|diabetic kidney disease|dkd|kidney disease|renal|nephropathy)\b|腎",
+        "egfr": r"\begfr\b|glomerular filtration|腎絲球|過濾率",
+        "uacr": r"\b(uacr|albuminuria|albumin-to-creatinine|proteinuria)\b|尿蛋白|白蛋白尿",
+        "sglt2": r"\bsglt2|sglt-2|sodium-glucose cotransporter 2\b",
+        "glp1": r"\bglp-?1|glucagon-like peptide|semaglutide|liraglutide|dulaglutide\b",
+        "finerenone": r"\bfinerenone|nonsteroidal mra|nsmra|mineralocorticoid receptor antagonist\b",
+        "metformin": r"\bmetformin\b",
+        "insulin": r"\binsulin\b|胰島素",
+        "hypoglycemia": r"\bhypoglycemia\b|低血糖",
+        "ascvd": r"\bascvd|cardiovascular disease|coronary|stroke|peripheral artery\b|心血管",
+        "heart_failure": r"\bheart failure|hfr?ef|hfpef\b|心衰",
+        "hypertension": r"\bhypertension|blood pressure\b|血壓",
+        "lipid": r"\blipid|statin|cholesterol|triglyceride\b|膽固醇",
+        "obesity": r"\bobesity|overweight|weight management|adiposity\b|肥胖|體重",
+        "masld": r"\bmasld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fibrosis\b|脂肪肝|肝硬化|肝纖維",
+        "pregnancy": r"\bpregnancy|gestational|gdm|preconception|postpartum\b|懷孕|妊娠",
+        "older_adults": r"\bolder adults|geriatric|frailty|cognitive impairment\b|老人|長者|高齡",
+        "children": r"\bchildren|adolescents|youth|pediatric\b|兒童|青少年",
+        "hospital": r"\bhospital|inpatient|critical illness|perioperative|surgery\b|住院|手術",
+        "retinopathy": r"\bretinopathy|retinal|eye examination\b|視網膜|眼",
+        "neuropathy": r"\bneuropathy|monofilament|foot ulcer|foot care\b|神經|足|腳",
+        "technology": r"\bcgm|bgm|smbg|time in range|automated insulin delivery\b|連續血糖|血糖機",
+        "diagnosis": r"\bdiagnosis|diagnostic|screening|ogtt|classification|prediabetes\b|診斷|篩檢",
+    }
+    for tag, pattern in clinical_patterns.items():
+        if re.search(pattern, haystack, flags=re.I):
+            tags.append(tag)
+
+    return tuple(dedupe_terms(tags))
+
+
+def parent_excerpt_for_chunk(chunk: KnowledgeChunk, query_tokens: list[str]) -> str:
+    if not chunk.parent_text:
+        return ""
+    parent_compact = re.sub(r"\s+", " ", chunk.parent_text).strip()
+    text_compact = re.sub(r"\s+", " ", chunk.text).strip()
+    if not parent_compact or parent_compact == text_compact:
+        return ""
+    max_chars = int(os.getenv("LINE_KNOWLEDGE_PARENT_SECTION_CHARS", "1800"))
+    return best_excerpt(parent_compact, query_tokens, max_chars)
 
 
 def chunk_dedup_key(chunk: KnowledgeChunk) -> tuple[str, ...]:
@@ -1221,6 +1365,10 @@ def required_facets(query: str) -> set[str]:
         facets.add("frequency")
     if any(term in query for term in ("懷孕", "妊娠", "孕")) or any(term in lower for term in ("pregnancy", "gestational", "gdm")):
         facets.add("pregnancy")
+    if any(term in query for term in ("脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
+        term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
+    ):
+        facets.update({"liver_context", "treatment"})
     if "低血糖" in query or "hypoglycemia" in lower:
         facets.update({"hypoglycemia", "treatment"})
     if any(term in query for term in ("處理", "治療", "怎麼辦")) or any(term in lower for term in ("treatment", "management")):
@@ -1229,7 +1377,10 @@ def required_facets(query: str) -> set[str]:
 
 
 def hit_facets(hit: KnowledgeHit) -> set[str]:
-    haystack = f"{hit.source} {hit.source_label} {hit.title} {hit.section} {hit.chunk_type} {hit.excerpt}".lower()
+    haystack = (
+        f"{hit.source} {hit.source_label} {hit.title} {hit.section} {hit.chunk_type} "
+        f"{' '.join(hit.metadata)} {hit.excerpt} {hit.parent_excerpt[:900]}"
+    ).lower()
     facets: set[str] = set()
     if re.search(r"\b(ckd|kidney|renal|egfr|albuminuria|uacr|dialysis|eskd|esrd)\b", haystack):
         facets.add("kidney_context")
@@ -1251,6 +1402,8 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
         facets.add("frequency")
     if re.search(r"\b(pregnancy|gestational|gdm|preconception|postpartum)\b", haystack):
         facets.add("pregnancy")
+    if re.search(r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fibrosis|hepatic)\b", haystack):
+        facets.add("liver_context")
     if "hypoglycemia" in haystack:
         facets.add("hypoglycemia")
     if re.search(r"\b(treatment|therapy|management|intervention|recommendation|recommended|prescribed)\b", haystack):

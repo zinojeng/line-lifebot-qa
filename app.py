@@ -66,7 +66,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-kdigo-priority-v15")
+APP_VERSION = os.getenv("APP_VERSION", "2026-04-30-guideline-hybrid-v16")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -97,6 +97,20 @@ LINE_LLM_RERANK_ENABLED = os.getenv("LINE_LLM_RERANK_ENABLED", "1").strip().lowe
     "off",
 }
 LINE_LLM_RERANK_TOP_K = int(os.getenv("LINE_LLM_RERANK_TOP_K", "5"))
+LINE_RECURSIVE_COVERAGE_ENABLED = os.getenv("LINE_RECURSIVE_COVERAGE_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_RECURSIVE_COVERAGE_MAX_QUERIES = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_QUERIES", "4"))
+LINE_RECURSIVE_COVERAGE_MAX_HITS = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_HITS", "4"))
+LINE_LONG_CONTEXT_VERIFICATION_ENABLED = os.getenv("LINE_LONG_CONTEXT_VERIFICATION_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 LINE_RETRIEVAL_QUERY_MAX_CHARS = int(os.getenv("LINE_RETRIEVAL_QUERY_MAX_CHARS", "1400"))
 LINE_TIMEOUT = int(os.getenv("LINE_TIMEOUT", "12"))
 LINE_MEMORY_ENABLED = os.getenv("LINE_MEMORY_ENABLED", "1").strip() != "0"
@@ -809,7 +823,7 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "不要提供醫療建議，不要回答問題，不要使用模型內建醫學知識下結論。"
         "請輸出 JSON，欄位固定為："
         "clinical_intent, question_type, patient_context, must_retrieve, required_facets, answer_strategy, do_not_answer_with。"
-        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, diagnosis, pregnancy, hypoglycemia, treatment, foot_care, frequency。"
+        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, diagnosis, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
         "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
         "answer_strategy 要明確說明：用檢索到的 eGFR 門檻與使用者 eGFR 數值比較，不需要文件逐字出現 exact eGFR 數字。"
@@ -912,6 +926,7 @@ def local_evidence_coverage(
             "treatment",
             "foot_care",
             "frequency",
+            "liver_context",
         }
     )
     if not required:
@@ -926,6 +941,122 @@ def local_evidence_coverage(
         return True, ""
 
     return False, "本地檢索仍缺少必要面向：" + ", ".join(sorted(missing))
+
+
+def hit_identity(hit: KnowledgeHit) -> tuple[str, str, str, str]:
+    return (
+        str(getattr(hit, "source", "")),
+        str(getattr(hit, "section", "")),
+        str(getattr(hit, "chunk_type", "")),
+        hashlib.sha1(str(getattr(hit, "excerpt", "")).encode("utf-8", errors="ignore")).hexdigest()[:12],
+    )
+
+
+def recursive_coverage_queries(
+    user_text: str,
+    hits: list[KnowledgeHit],
+    clinical_intent: dict[str, Any] | None = None,
+) -> list[str]:
+    if not LINE_RECURSIVE_COVERAGE_ENABLED:
+        return []
+
+    required = set(required_facets(user_text))
+    required.update(required_facets(clinical_intent_text(clinical_intent)))
+    required.update(json_list((clinical_intent or {}).get("required_facets")))
+
+    covered: set[str] = set()
+    for hit in hits:
+        covered.update(hit_facets(hit))
+    missing = required - covered
+
+    lower = f"{user_text} {clinical_intent_text(clinical_intent)}".lower()
+    queries: list[str] = []
+    kidney = any(term in user_text for term in ("腎", "腎絲球", "尿蛋白", "白蛋白尿")) or any(
+        term in lower for term in ("ckd", "kidney", "renal", "egfr", "uacr", "albuminuria")
+    )
+    medication = any(term in user_text for term in ("藥", "用藥", "降血糖", "合併")) or any(
+        term in lower for term in ("medication", "pharmacologic", "sglt", "glp", "metformin", "insulin", "finerenone")
+    )
+    liver = any(term in user_text for term in ("脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
+        term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
+    )
+
+    facet_queries = {
+        "kidney_context": f"{user_text} CKD chronic kidney disease eGFR albuminuria UACR KDIGO ADA AACE",
+        "medication": f"{user_text} pharmacologic therapy medication selection SGLT2 GLP-1 metformin insulin finerenone",
+        "threshold": f"{user_text} eGFR threshold cutoff contraindication initiate discontinue dose adjustment",
+        "glycemic_target": f"{user_text} glycemic goals A1C goal individualized target hypoglycemia risk",
+        "a1c_reliability": f"{user_text} A1C less reliable advanced CKD dialysis glycated albumin fructosamine CGM BGM",
+        "monitoring": f"{user_text} monitoring CGM BGM SMBG time in range follow-up",
+        "diagnosis": f"{user_text} diagnosis screening diagnostic criteria A1C fasting plasma glucose OGTT",
+        "pregnancy": f"{user_text} pregnancy gestational diabetes preconception postpartum insulin glycemic goals",
+        "hypoglycemia": f"{user_text} hypoglycemia level 1 level 2 level 3 treatment glucagon severe hypoglycemia",
+        "treatment": f"{user_text} treatment management recommendation therapy intervention",
+        "foot_care": f"{user_text} foot care neuropathy monofilament ulcer peripheral artery disease screening",
+        "frequency": f"{user_text} screening frequency annually every year follow-up interval",
+        "liver_context": f"{user_text} MASLD MASH NAFLD NASH steatotic liver disease diabetes obesity fibrosis cirrhosis",
+    }
+    for facet in sorted(missing):
+        query = facet_queries.get(facet)
+        if query:
+            queries.append(query)
+
+    if kidney and medication:
+        queries.extend(
+            [
+                f"{user_text} SGLT2 inhibitor eGFR initiation threshold continuation DKA acute illness perioperative hold KDIGO",
+                f"{user_text} metformin eGFR renal function contraindication contrast acute illness perioperative older adults",
+                f"{user_text} GLP-1 receptor agonist CKD ASCVD weight hypoglycemia kidney cardiovascular benefit",
+                f"{user_text} finerenone nonsteroidal MRA UACR albuminuria eGFR potassium hyperkalemia",
+            ]
+        )
+    if liver:
+        queries.extend(
+            [
+                f"{user_text} MASLD NAFLD metabolic dysfunction-associated steatotic liver disease diabetes obesity weight loss",
+                f"{user_text} MASH NASH steatohepatitis GLP-1 receptor agonist pioglitazone tirzepatide cirrhosis fibrosis",
+            ]
+        )
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for query in queries:
+        compact = re.sub(r"\s+", " ", query).strip()
+        key = compact.lower()
+        if compact and key not in seen:
+            seen.add(key)
+            deduped.append(compact)
+        if len(deduped) >= LINE_RECURSIVE_COVERAGE_MAX_QUERIES:
+            break
+    return deduped
+
+
+def append_recursive_coverage_hits(
+    user_text: str,
+    selected_hits: list[KnowledgeHit],
+    clinical_intent: dict[str, Any] | None = None,
+) -> tuple[list[KnowledgeHit], str]:
+    queries = recursive_coverage_queries(user_text, selected_hits, clinical_intent)
+    if not queries:
+        return selected_hits, ""
+
+    merged = list(selected_hits)
+    seen = {hit_identity(hit) for hit in merged}
+    added = 0
+    for query in queries:
+        for hit in search_knowledge_candidates(query):
+            key = hit_identity(hit)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(hit)
+            added += 1
+            if added >= LINE_RECURSIVE_COVERAGE_MAX_HITS:
+                note = f"recursive coverage retrieval 補入 {added} 個候選片段。"
+                return merged, note
+    if added:
+        return merged, f"recursive coverage retrieval 補入 {added} 個候選片段。"
+    return selected_hits, "recursive coverage retrieval 已執行，但沒有找到新的非重複片段。"
 
 
 def comparative_threshold_question(user_text: str) -> bool:
@@ -1076,6 +1207,60 @@ def build_evidence_review(
         return ""
 
 
+def build_long_context_verification(
+    api_key: str,
+    user_text: str,
+    hits: list[KnowledgeHit],
+    clinical_intent: dict[str, Any] | None = None,
+    evidence_review: str = "",
+) -> str:
+    if not LINE_LONG_CONTEXT_VERIFICATION_ENABLED or not api_key or not hits:
+        return ""
+
+    system_text = (
+        "你是臨床指南長上下文驗證器，不是最終回答者。"
+        "你只能根據提供的指南片段、父層章節上下文與結構化標籤檢查 evidence coverage。"
+        "不要使用模型內建知識、不要補充未提供的指南內容。"
+        "請檢查：1. 是否有回答使用者核心問題的直接依據；"
+        "2. 是否需要補足其他章節、表格、footnote 或特殊族群；"
+        "3. recommendation、rationale、table 或 safety warning 是否互相矛盾。"
+        "輸出繁體中文，最多 6 行。最後一行必須是 VERIFIED: yes 或 VERIFIED: no。"
+    )
+    prompt = (
+        f"使用者問題：{user_text}\n\n"
+        f"{clinical_intent_prompt(clinical_intent) or '臨床問題理解：無'}\n\n"
+        f"{knowledge_prompt_from_hits(hits)}\n\n"
+        f"初步證據整理：\n{evidence_review or '無'}\n\n"
+        "請做長上下文二次確認。"
+    )
+    try:
+        return call_llm(
+            api_key,
+            system_text,
+            prompt,
+            max_output_tokens=420,
+            temperature=0.05,
+            timeout=min(GEMINI_TIMEOUT, 12),
+        ).strip()
+    except Exception as exc:
+        print(f"{LLM_PROVIDER} long-context verification failed: {type(exc).__name__}: {exc}")
+        return ""
+
+
+def long_context_verification_prompt(verification: str) -> str:
+    if not verification:
+        return ""
+    return (
+        "\n\n長上下文二次確認：\n"
+        "以下驗證只根據本輪片段與父層章節上下文；若它指出缺口，最終回答不可補完缺口。\n"
+        f"{verification}"
+    )
+
+
+def long_context_says_unverified(verification: str) -> bool:
+    return bool(re.search(r"VERIFIED\s*:\s*no\b", verification, flags=re.I))
+
+
 def evidence_review_prompt(review: str) -> str:
     if not review:
         return ""
@@ -1159,6 +1344,15 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         return knowledge_no_answer_text()
 
     selected_hits, rerank_answerable, coverage_gaps = select_guideline_hits(api_key, user_text, candidates, clinical_intent)
+    selected_hits, recursive_note = append_recursive_coverage_hits(user_text, selected_hits, clinical_intent)
+    if recursive_note:
+        coverage_gaps = (coverage_gaps + "；" if coverage_gaps else "") + recursive_note
+    if selected_hits:
+        recursive_answerable, recursive_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
+        if recursive_answerable:
+            rerank_answerable = True
+        elif recursive_gap:
+            coverage_gaps = (coverage_gaps + "；" if coverage_gaps else "") + recursive_gap
     if not selected_hits or not rerank_answerable:
         return knowledge_no_answer_text()
 
@@ -1173,6 +1367,17 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             + "\n\n本地 coverage override：此題可用指南片段中的 eGFR 門檻做比較式回答；"
             "不要補充片段外資訊，也不要給個人化劑量。"
         )
+    long_context_verification = build_long_context_verification(
+        api_key,
+        user_text,
+        selected_hits,
+        clinical_intent,
+        evidence_review,
+    )
+    if long_context_says_unverified(long_context_verification):
+        locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
+        if not (comparative_threshold_question(user_text) and locally_answerable):
+            return knowledge_no_answer_text()
     system_text = (
         SYSTEM_PROMPT
         + memory_prompt(line_user_id)
@@ -1181,6 +1386,7 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         + knowledge_text
         + rerank_coverage_prompt(coverage_gaps)
         + evidence_review_prompt(evidence_review)
+        + long_context_verification_prompt(long_context_verification)
     )
     try:
         answer = call_llm(
@@ -1268,6 +1474,11 @@ def health() -> dict[str, Any]:
             "llm_reranker": LINE_LLM_RERANK_ENABLED,
             "coverage_answerability_check": True,
             "parent_child_table_context": True,
+            "parent_child_section_retrieval": True,
+            "structured_metadata_extraction": True,
+            "recursive_coverage_retrieval": LINE_RECURSIVE_COVERAGE_ENABLED,
+            "local_hashed_vector_index": True,
+            "long_context_verification": LINE_LONG_CONTEXT_VERIFICATION_ENABLED,
             "guideline_strict_grounding_current": True,
             "guideline_query_planning_current": LINE_QUERY_PLANNING_ENABLED,
             "guideline_evidence_review_current": LINE_EVIDENCE_REVIEW_ENABLED,
