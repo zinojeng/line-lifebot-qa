@@ -26,6 +26,7 @@ try:
         knowledge_prompt_from_hits,
         knowledge_status,
         hit_facets,
+        clinical_search_brain_plan,
         query_variant_specs,
         required_facets,
         search_knowledge_candidates,
@@ -71,10 +72,13 @@ except ModuleNotFoundError:
     def hit_facets(hit: Any) -> set[str]:
         return set()
 
+    def clinical_search_brain_plan(query: str) -> dict[str, list[str]]:
+        return {}
+
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-dense-ontology-v21")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-clinical-brain-v22")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -780,6 +784,10 @@ def clinical_intent_text(clinical_intent: dict[str, Any] | None) -> str:
         *json_list(clinical_intent.get("patient_context")),
         *json_list(clinical_intent.get("must_retrieve")),
         *json_list(clinical_intent.get("required_facets")),
+        *json_list(clinical_intent.get("concepts")),
+        *json_list(clinical_intent.get("target_chapters")),
+        *json_list(clinical_intent.get("evidence_targets")),
+        *json_list(clinical_intent.get("avoid_routes")),
     ]
     return " ".join(part for part in parts if part).strip()
 
@@ -796,8 +804,9 @@ def clinical_intent_prompt(clinical_intent: dict[str, Any] | None) -> str:
 
 
 def fallback_clinical_intent(user_text: str) -> dict[str, Any]:
+    brain_plan = clinical_search_brain_plan(user_text)
     if comparative_threshold_question(user_text):
-        return {
+        intent = {
             "clinical_intent": "advanced_ckd_medication_selection",
             "question_type": "medication_threshold_comparison",
             "patient_context": ["diabetes", "advanced CKD", "low eGFR", user_text],
@@ -821,8 +830,9 @@ def fallback_clinical_intent(user_text: str) -> dict[str, Any]:
                 "model general medical knowledge",
             ],
         }
+        return merge_clinical_brain(intent, brain_plan)
     facets = sorted(required_facets(user_text))
-    return {
+    intent = {
         "clinical_intent": "diabetes_guideline_question",
         "question_type": "guideline_grounded_answer",
         "patient_context": [user_text],
@@ -831,6 +841,41 @@ def fallback_clinical_intent(user_text: str) -> dict[str, Any]:
         "answer_strategy": "answer only if retrieved guideline snippets cover the user's core question",
         "do_not_answer_with": ["model general medical knowledge", "unsupported inference"],
     }
+    return merge_clinical_brain(intent, brain_plan)
+
+
+def merge_clinical_brain(intent: dict[str, Any], brain_plan: dict[str, list[str]]) -> dict[str, Any]:
+    if not brain_plan:
+        return intent
+    merged = dict(intent)
+    for target_key, brain_key in (
+        ("concepts", "concepts"),
+        ("target_chapters", "target_chapters"),
+        ("evidence_targets", "evidence_targets"),
+        ("avoid_routes", "avoid_routes"),
+        ("required_facets", "required_facets"),
+        ("must_retrieve", "evidence_targets"),
+    ):
+        values = [*json_list(merged.get(target_key)), *json_list(brain_plan.get(brain_key))]
+        merged[target_key] = dedupe_preserve(values)
+    merged["clinical_search_brain"] = brain_plan
+    if brain_plan.get("avoid_routes"):
+        merged["do_not_answer_with"] = dedupe_preserve(
+            [*json_list(merged.get("do_not_answer_with")), *brain_plan["avoid_routes"]]
+        )
+    return merged
+
+
+def dedupe_preserve(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        compact = re.sub(r"\s+", " ", str(value)).strip()
+        key = compact.lower()
+        if compact and key not in seen:
+            seen.add(key)
+            result.append(compact)
+    return result
 
 
 def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> dict[str, Any]:
@@ -843,8 +888,9 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "你的任務是先理解使用者真正要問的臨床問題，定義需要檢索哪些指南證據。"
         "不要提供醫療建議，不要回答問題，不要使用模型內建醫學知識下結論。"
         "請輸出 JSON，欄位固定為："
-        "clinical_intent, question_type, patient_context, must_retrieve, required_facets, answer_strategy, do_not_answer_with。"
-        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, technology_indication, diagnosis, retinopathy_context, staging, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context。"
+        "clinical_intent, question_type, patient_context, concepts, target_chapters, evidence_targets, must_retrieve, required_facets, avoid_routes, answer_strategy, do_not_answer_with。"
+        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, technology_indication, diagnosis, retinopathy_context, staging, pad_context, ascvd_context, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context。"
+        "若使用者用白話描述下肢動脈阻塞、腳血管塞住、跛行、下肢缺血，請理解為 PAD / lower-extremity arterial disease / ASCVD；target_chapters 應包含 ADA S10 與 ADA S12，evidence_targets 應包含 antiplatelet、aspirin/clopidogrel、rivaroxaban plus aspirin、statin/lipid、blood pressure、smoking cessation、vascular assessment/revascularization、GLP-1 RA/semaglutide limb outcome evidence；avoid_routes 要說不要只用一般降血糖藥物表回答。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
         "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
         "answer_strategy 要明確說明：用檢索到的 eGFR 門檻與使用者 eGFR 數值比較，不需要文件逐字出現 exact eGFR 數字。"
@@ -871,9 +917,18 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
     if not data:
         return fallback
     merged = {**fallback, **data}
-    for key in ("patient_context", "must_retrieve", "required_facets", "do_not_answer_with"):
+    for key in (
+        "patient_context",
+        "concepts",
+        "target_chapters",
+        "evidence_targets",
+        "must_retrieve",
+        "required_facets",
+        "avoid_routes",
+        "do_not_answer_with",
+    ):
         merged[key] = json_list(merged.get(key))
-    return merged
+    return merge_clinical_brain(merged, clinical_search_brain_plan(user_text))
 
 
 def build_retrieval_query(
@@ -889,10 +944,11 @@ def build_retrieval_query(
         "你不是回答者，也不要提供醫療建議。"
         "你的唯一任務是把 LINE 病友問題轉成已載入臨床指南文件檢索查詢。"
         "請根據本次問題與最近對話脈絡，補上可能出現在這些指南文件中的英文術語、縮寫、同義詞與章節詞。"
-        "你會收到 clinical intent JSON；請優先根據 must_retrieve、required_facets、answer_strategy 產生多面向檢索詞。"
+        "你會收到 clinical intent JSON；請優先根據 concepts、target_chapters、evidence_targets、must_retrieve、required_facets、avoid_routes、answer_strategy 產生多面向檢索詞。"
         "若問題提到洗腎/透析/腎衰竭與血糖控制目標，請加入 dialysis、kidney failure、glycemic goals、A1C goal、A1C reliability、CGM、BGM、glycated albumin、fructosamine。"
         "若 question_type 是 medication_threshold_comparison，請加入 CKD glucose-lowering therapy、SGLT2 inhibitor eGFR threshold、metformin eGFR、GLP-1 RA CKD、finerenone nonsteroidal MRA eGFR、hypoglycemia risk advanced CKD、insulin kidney impairment。"
         "若問題提到脂肪肝、脂肪性肝炎、MASLD、MASH、NAFLD、NASH、肝硬化或肝纖維化，請加入 MASLD、MASH、NAFLD、NASH、steatotic liver disease、steatohepatitis、fibrosis、cirrhosis、GLP-1 receptor agonist、pioglitazone、tirzepatide、weight loss。"
+        "若 concepts 或問題指向 PAD、peripheral artery disease、下肢動脈阻塞、下肢缺血或跛行，請加入 ADA section 10、ADA section 12、PAD、lower-extremity arterial disease、ASCVD、antiplatelet、aspirin、clopidogrel、rivaroxaban、statin、lipid-lowering、blood pressure、smoking cessation、ABI、toe pressure、revascularization、semaglutide、STRIDE、limb outcomes；並避免只搜尋 glucose-lowering medication table。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"
     )
@@ -929,7 +985,6 @@ def local_evidence_coverage(
     clinical_intent: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
     required = set(required_facets(user_text))
-    required.update(required_facets(clinical_intent_text(clinical_intent)))
     required.update(
         facet
         for facet in json_list((clinical_intent or {}).get("required_facets"))
@@ -945,6 +1000,8 @@ def local_evidence_coverage(
             "diagnosis",
             "retinopathy_context",
             "staging",
+            "pad_context",
+            "ascvd_context",
             "pregnancy",
             "hypoglycemia",
             "treatment",
@@ -985,7 +1042,6 @@ def recursive_coverage_queries(
         return []
 
     required = set(required_facets(user_text))
-    required.update(required_facets(clinical_intent_text(clinical_intent)))
     required.update(json_list((clinical_intent or {}).get("required_facets")))
 
     covered: set[str] = set()
@@ -1016,6 +1072,8 @@ def recursive_coverage_queries(
         "diagnosis": f"{user_text} diagnosis screening diagnostic criteria A1C fasting plasma glucose OGTT",
         "retinopathy_context": f"{user_text} ADA section 12 diabetic retinopathy retinal disease ophthalmologist macular edema DME NPDR PDR",
         "staging": f"{user_text} staging severity classification mild moderate severe nonproliferative proliferative NPDR PDR diabetic macular edema DME",
+        "pad_context": f"{user_text} ADA section 10 section 12 peripheral artery disease PAD lower-extremity arterial disease claudication limb ischemia ABI toe pressure revascularization amputation semaglutide STRIDE limb outcomes",
+        "ascvd_context": f"{user_text} ASCVD cardiovascular disease risk management antiplatelet aspirin clopidogrel rivaroxaban statin lipid blood pressure smoking cessation GLP-1 RA SGLT2 inhibitor",
         "pregnancy": f"{user_text} pregnancy gestational diabetes preconception postpartum insulin glycemic goals",
         "hypoglycemia": f"{user_text} hypoglycemia level 1 level 2 level 3 treatment glucagon severe hypoglycemia",
         "treatment": f"{user_text} treatment management recommendation therapy intervention",
@@ -1095,7 +1153,6 @@ def broad_section_context_needed(
         return False
     lower = f"{user_text} {clinical_intent_text(clinical_intent)}".lower()
     facets = set(required_facets(user_text))
-    facets.update(required_facets(clinical_intent_text(clinical_intent)))
     facets.update(json_list((clinical_intent or {}).get("required_facets")))
     if "technology_indication" in facets:
         return True
@@ -1439,7 +1496,6 @@ def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
     for hit in selected_hits:
         covered_facets.update(hit_facets(hit))
     required = set(required_facets(user_text))
-    required.update(required_facets(clinical_intent_text(clinical_intent)))
     required.update(json_list((clinical_intent or {}).get("required_facets")))
     return {
         "query": user_text,
@@ -1621,6 +1677,7 @@ def health() -> dict[str, Any]:
             "multi_query_retrieval": True,
             "intent_query_variants": True,
             "clinical_concept_routing": True,
+            "hermes_clinical_search_brain": True,
             "metadata_indexing": True,
             "automatic_ontology_extraction": True,
             "dense_embedding_index": True,

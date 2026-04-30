@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-01-dense-ontology-v21
+APP_VERSION=2026-05-01-clinical-brain-v22
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -67,7 +67,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-01-dense-ontology-v21
+APP_VERSION=2026-05-01-clinical-brain-v22
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -214,9 +214,12 @@ LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS=700
 Per message, the flow is:
 
 1. Use the current question plus short-term LINE context to create a clinical
-   intent JSON: clinical intent, question type, patient context, evidence facets,
-   must-retrieve topics, and answer strategy.
-2. Use that clinical intent JSON to create a guideline search query with likely
+   intent JSON plus a Hermes Clinical Search Brain plan: clinical concepts,
+   target chapters, evidence targets, avoid-routes, required facets, and answer
+   strategy. For example, lower-extremity arterial obstruction routes to PAD /
+   ASCVD evidence in ADA S10 and ADA S12 instead of general glucose-lowering
+   medication tables.
+2. Use that clinical intent JSON and brain plan to create a guideline search query with likely
    English terms, abbreviations, section words, and evidence targets.
 3. Search the mounted guideline Markdown files with hierarchical hybrid
    retrieval: multi-query BM25-style scoring, local hashed vector scoring,
@@ -225,8 +228,8 @@ Per message, the flow is:
    such as source, year, ADA chapter, recommendation id/grade, table row type, CKD/eGFR/UACR, medication,
    MASLD/MASH, pregnancy, older adults, and hospital/perioperative context.
 4. Apply clinical concept routing for common medical intents such as staging,
-   treatment, screening, monitoring, indications, retinopathy, neuropathy, foot
-   care, CKD, MASLD/MASH, pregnancy, and diabetes technology. This avoids adding
+   treatment, screening, monitoring, indications, PAD/lower-extremity arterial
+   disease, retinopathy, neuropathy, foot care, CKD, MASLD/MASH, pregnancy, and diabetes technology. This avoids adding
    a one-off keyword for every failed user phrase.
 5. Use parent-child retrieval. Recommendations, text chunks, section summaries,
    and table rows rank independently, but selected hits carry the parent section excerpt so recommendations,
@@ -455,7 +458,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-01-dense-ontology-v21",
+  "app_version": "2026-05-01-clinical-brain-v22",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -478,6 +481,7 @@ The health check should include:
     "multi_query_retrieval": true,
     "intent_query_variants": true,
     "clinical_concept_routing": true,
+    "hermes_clinical_search_brain": true,
     "metadata_indexing": true,
     "automatic_ontology_extraction": true,
     "dense_embedding_index": true,

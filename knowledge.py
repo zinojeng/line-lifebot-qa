@@ -94,6 +94,11 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "分級": ("staging", "stage", "severity", "classification", "mild", "moderate", "severe", "nonproliferative", "proliferative"),
     "新的治療": ("treatment", "therapy", "intervention", "anti-VEGF", "laser photocoagulation", "vitrectomy", "emerging therapies"),
     "腳": ("foot", "neuropathy", "ulcer", "podiatrist"),
+    "下肢": ("lower extremity", "lower limb", "peripheral artery disease", "PAD", "limb ischemia"),
+    "動脈阻塞": ("peripheral artery disease", "PAD", "lower-extremity arterial disease", "limb ischemia", "revascularization"),
+    "血管阻塞": ("peripheral artery disease", "PAD", "atherosclerotic cardiovascular disease", "limb ischemia"),
+    "跛行": ("claudication", "peripheral artery disease", "PAD", "walking distance", "limb ischemia"),
+    "缺血": ("ischemia", "limb ischemia", "peripheral artery disease", "PAD", "revascularization"),
     "心臟": ("cardiovascular", "heart", "ASCVD", "blood pressure", "lipid"),
     "心血管": ("cardiovascular", "ASCVD", "heart failure", "MACE", "cardiorenal"),
     "心衰竭": ("heart failure", "HF", "HFrEF", "HFpEF", "heart failure hospitalization"),
@@ -198,6 +203,14 @@ QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "neuropathy foot care ulcer screening monofilament peripheral arterial disease",
             "diabetic foot evaluation prevention referral",
+        ),
+    ),
+    (
+        ("下肢", "動脈阻塞", "血管阻塞", "跛行", "缺血", "pad", "peripheral artery", "claudication"),
+        (
+            "peripheral artery disease PAD lower-extremity arterial disease ASCVD antiplatelet aspirin clopidogrel rivaroxaban statin lipid blood pressure smoking cessation",
+            "ADA section 10 cardiovascular disease risk management PAD ASCVD antiplatelet therapy lipid-lowering therapy blood pressure",
+            "ADA section 12 foot care PAD lower extremity pulses claudication ABI toe pressures vascular assessment revascularization semaglutide STRIDE limb outcomes",
         ),
     ),
     (
@@ -1559,6 +1572,7 @@ def query_variants(query: str) -> list[str]:
 def query_variant_specs(query: str) -> list[QueryVariant]:
     variants: list[QueryVariant] = [QueryVariant("original", query, 1.0)]
     query_lower = query.lower()
+    brain_plan = clinical_search_brain_plan(query)
 
     expansion_terms: list[str] = []
     for key, terms in QUERY_EXPANSIONS.items():
@@ -1578,6 +1592,8 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
             QueryVariant(f"keyword_{entry.module}_{entry.entry_id}", f"{query} {variant_query}", 0.84)
             for variant_query in entry.variant_queries[:2]
         )
+    for index, brain_query in enumerate(brain_plan.get("search_queries", [])[:4], start=1):
+        variants.append(QueryVariant(f"clinical_brain_{index}", f"{query} {brain_query}", 0.9))
 
     pregnancy_query = any(term in query for term in ("懷孕", "妊娠", "孕")) or any(
         term in query_lower for term in ("pregnancy", "gestational", "gdm")
@@ -1664,7 +1680,125 @@ def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
                 0.9,
             )
         )
+    if "pad" in concepts:
+        variants.extend(
+            [
+                QueryVariant(
+                    "concept_pad_cardiovascular",
+                    f"{query} ADA section 10 dc26s010 cardiovascular disease risk management peripheral artery disease PAD lower-extremity arterial disease ASCVD antiplatelet aspirin clopidogrel rivaroxaban statin lipid blood pressure smoking cessation GLP-1 RA semaglutide SGLT2 inhibitor limb outcomes",
+                    0.97,
+                ),
+                QueryVariant(
+                    "concept_pad_foot",
+                    f"{query} ADA section 12 dc26s012 peripheral artery disease PAD lower extremity pulses claudication rest pain ABI toe pressures vascular assessment revascularization diabetic foot ulcer gangrene amputation semaglutide STRIDE lower-extremity complications",
+                    0.94,
+                ),
+            ]
+        )
     return variants
+
+
+CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
+    "pad": {
+        "concepts": ["peripheral artery disease", "lower-extremity arterial disease", "ASCVD", "diabetic foot PAD"],
+        "target_chapters": [
+            "ADA S10 Cardiovascular Disease and Risk Management",
+            "ADA S12 Retinopathy, Neuropathy, and Foot Care",
+        ],
+        "evidence_targets": [
+            "PAD and ASCVD secondary prevention",
+            "antiplatelet therapy: aspirin, clopidogrel, or P2Y12 alternative when aspirin intolerance is relevant",
+            "low-dose rivaroxaban plus aspirin when guideline criteria and bleeding risk allow",
+            "lipid-lowering therapy / statin / LDL risk management",
+            "blood pressure management",
+            "smoking cessation",
+            "GLP-1 RA / semaglutide limb outcome evidence such as STRIDE if present in guideline snippets",
+            "vascular assessment / ABI / toe pressure / revascularization referral when limb ischemia or ulcer/gangrene is present",
+        ],
+        "avoid_routes": [
+            "do not answer PAD drug therapy from general glucose-lowering medication tables alone",
+            "do not treat lower-extremity arterial obstruction as neuropathy-only foot care",
+        ],
+        "required_facets": ["pad_context", "ascvd_context", "treatment"],
+        "search_queries": [
+            "ADA section 10 cardiovascular disease risk management peripheral artery disease PAD ASCVD antiplatelet aspirin clopidogrel rivaroxaban statin lipid blood pressure smoking cessation",
+            "ADA section 12 foot care peripheral artery disease PAD lower extremity claudication ABI toe pressures vascular assessment revascularization gangrene amputation semaglutide STRIDE limb outcomes",
+        ],
+    },
+    "retinopathy": {
+        "concepts": ["diabetic retinopathy", "diabetic macular edema", "NPDR", "PDR"],
+        "target_chapters": ["ADA S12 Retinopathy, Neuropathy, and Foot Care"],
+        "evidence_targets": ["screening", "staging/severity", "anti-VEGF", "photocoagulation", "vitrectomy", "pregnancy monitoring"],
+        "avoid_routes": ["do not answer eye disease from general diagnosis chapters alone"],
+        "required_facets": ["retinopathy_context"],
+        "search_queries": [
+            "ADA section 12 diabetic retinopathy NPDR PDR diabetic macular edema DME anti-VEGF photocoagulation vitrectomy ophthalmologist"
+        ],
+    },
+    "technology": {
+        "concepts": ["continuous glucose monitoring", "diabetes technology"],
+        "target_chapters": ["ADA S7 Diabetes Technology", "ADA S6 Glycemic Goals and Hypoglycemia"],
+        "evidence_targets": ["CGM indications", "insulin therapy", "hypoglycemia risk", "time in range"],
+        "avoid_routes": ["do not answer CGM indications only from generic monitoring text"],
+        "required_facets": ["technology_indication", "monitoring"],
+        "search_queries": [
+            "ADA section 7 continuous glucose monitoring CGM recommended diabetes onset insulin therapy noninsulin therapies hypoglycemia time in range"
+        ],
+    },
+    "ckd": {
+        "concepts": ["CKD", "diabetic kidney disease", "eGFR", "albuminuria"],
+        "target_chapters": ["ADA S11 CKD", "ADA S9 Pharmacologic Approaches", "KDIGO Diabetes and CKD"],
+        "evidence_targets": ["SGLT2 inhibitor", "GLP-1 RA", "metformin eGFR limitation", "finerenone", "albuminuria/UACR", "hypoglycemia risk"],
+        "avoid_routes": ["do not answer CKD medication selection from glucose efficacy alone"],
+        "required_facets": ["kidney_context"],
+        "search_queries": [
+            "CKD diabetes eGFR albuminuria UACR SGLT2 inhibitor GLP-1 RA metformin finerenone kidney cardiovascular protection KDIGO ADA"
+        ],
+    },
+    "liver": {
+        "concepts": ["MASLD", "MASH", "NAFLD", "NASH", "steatotic liver disease"],
+        "target_chapters": ["ADA S4 Comprehensive Medical Evaluation", "ADA S8 Obesity", "ADA S9 Pharmacologic Approaches"],
+        "evidence_targets": ["weight loss", "GLP-1 RA", "tirzepatide", "pioglitazone", "cirrhosis safety"],
+        "avoid_routes": ["do not answer liver disease from obesity text alone unless MASLD/MASH evidence is present"],
+        "required_facets": ["liver_context", "treatment"],
+        "search_queries": [
+            "MASLD MASH NAFLD NASH steatotic liver disease diabetes obesity fibrosis cirrhosis GLP-1 receptor agonist tirzepatide pioglitazone weight loss"
+        ],
+    },
+}
+
+
+def clinical_search_brain_plan(query: str) -> dict[str, list[str]]:
+    lower = query.lower()
+    concepts = query_concepts(query, lower)
+    if any(term in query for term in ("連續血糖", "連續血糖監測", "新科技", "血糖機")) or any(
+        term in lower for term in ("cgm", "continuous glucose", "diabetes technology")
+    ):
+        concepts.add("technology")
+    if any(term in query for term in ("腎", "腎絲球", "尿蛋白", "白蛋白尿")) or any(
+        term in lower for term in ("ckd", "kidney", "renal", "egfr", "uacr", "albuminuria")
+    ):
+        concepts.add("ckd")
+    if any(term in query for term in ("脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
+        term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
+    ):
+        concepts.add("liver")
+
+    plan: dict[str, list[str]] = {
+        "concepts": [],
+        "target_chapters": [],
+        "evidence_targets": [],
+        "avoid_routes": [],
+        "required_facets": [],
+        "search_queries": [],
+    }
+    for concept in sorted(concepts):
+        profile = CLINICAL_CONCEPT_PROFILES.get(concept)
+        if not profile:
+            continue
+        for key in plan:
+            plan[key].extend(profile.get(key, []))
+    return {key: dedupe_terms(values) for key, values in plan.items() if values}
 
 
 def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
@@ -1682,6 +1816,25 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
         term in lower for term in ("foot", "ulcer", "monofilament", "pad", "wound")
     ):
         concepts.add("foot_care")
+    if any(term in query for term in ("下肢", "動脈阻塞", "血管阻塞", "血管塞", "塞住", "循環不好", "週邊動脈", "周邊動脈", "跛行", "缺血", "壞疽")) or any(
+        term in lower
+        for term in (
+            "peripheral artery disease",
+            "peripheral arterial disease",
+            "pad",
+            "lower extremity",
+            "lower-extremity",
+            "lower limb",
+            "claudication",
+            "limb ischemia",
+            "gangrene",
+            "amputation",
+            "abi",
+            "toe pressure",
+            "revascularization",
+        )
+    ):
+        concepts.update({"pad", "ascvd"})
     if any(term in query for term in ("分期", "分級", "嚴重度", "第幾期", "程度")) or any(
         term in lower for term in ("staging", "stage", "severity", "classification", "mild", "moderate", "severe")
     ):
@@ -1922,6 +2075,8 @@ def required_facets(query: str) -> set[str]:
         term in lower for term in ("foot", "neuropathy", "monofilament", "ulcer")
     ):
         facets.add("foot_care")
+    if "pad" in concepts:
+        facets.update({"pad_context", "ascvd_context"})
     if "retinopathy" in concepts:
         facets.add("retinopathy_context")
     if "staging" in concepts:
@@ -1974,6 +2129,13 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
         facets.add("staging")
     if re.search(r"\b(foot|neuropathy|monofilament|ulcer|protective sensation|peripheral artery|pad|lops|podiatrist)\b", haystack):
         facets.add("foot_care")
+    if re.search(
+        r"\b(peripheral artery disease|peripheral arterial disease|pad|lower-extremity|lower extremity|lower limb|claudication|limb ischemia|gangrene|amputation|abi|toe pressure|revascularization)\b",
+        haystack,
+    ):
+        facets.add("pad_context")
+    if re.search(r"\b(ascvd|cardiovascular disease|antiplatelet|aspirin|clopidogrel|rivaroxaban|statin|lipid|blood pressure|smoking cessation)\b", haystack):
+        facets.add("ascvd_context")
     if re.search(r"\b(annually|every \d|months?|yearly|frequency|examination frequency|at least yearly)\b", haystack):
         facets.add("frequency")
     if re.search(r"\b(pregnancy|gestational|gdm|preconception|postpartum)\b", haystack):
@@ -2123,6 +2285,7 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     )
     concepts = query_concepts(query, query_lower)
     retinopathy_query = "retinopathy" in concepts
+    pad_query = "pad" in concepts
     staging_query = "staging" in concepts
     treatment_query = "treatment" in concepts
     technology_indication_query = (
@@ -2178,6 +2341,25 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 2.6
     if technology_indication_query and re.search(r"\b(cgm metrics|table 6\.2|time in range|tar|tbr|tir)\b", haystack):
         adjustment *= 0.55
+    if pad_query and ("dc26s010" in haystack or "cardiovascular disease and risk management" in haystack):
+        adjustment *= 5.0
+    if pad_query and ("dc26s012" in haystack or "foot care" in haystack):
+        adjustment *= 3.2
+    if pad_query and re.search(
+        r"\b(peripheral artery disease|peripheral arterial disease|pad|lower-extremity|lower extremity|claudication|limb ischemia|gangrene|amputation|abi|toe pressure|revascularization)\b",
+        haystack,
+    ):
+        adjustment *= 3.4
+    if pad_query and treatment_query and re.search(
+        r"\b(antiplatelet|aspirin|clopidogrel|rivaroxaban|statin|lipid-lowering|blood pressure|hypertension|smoking cessation|semaglutide|glp-1|stride|major adverse limb|limb outcomes)\b",
+        haystack,
+    ):
+        adjustment *= 3.0
+    if pad_query and ("dc26s009" in haystack or "pharmacologic approaches to glycemic treatment" in haystack) and not re.search(
+        r"\b(peripheral artery disease|pad|lower-extremity|limb|amputation|semaglutide|glp-1|ascvd)\b",
+        haystack,
+    ):
+        adjustment *= 0.18
     if retinopathy_query and ("dc26s012" in haystack or "retinopathy, neuropathy, and foot care" in haystack):
         adjustment *= 5.2
     elif retinopathy_query and ("retinopathy" in haystack or "macular edema" in haystack):
