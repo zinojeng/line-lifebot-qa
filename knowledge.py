@@ -36,13 +36,18 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "血糖": ("glucose", "glycemic", "hyperglycemia", "hypoglycemia", "blood glucose"),
     "低血糖": ("hypoglycemia", "glucagon", "level 1", "level 2", "level 3"),
     "高血糖": ("hyperglycemia", "glucose", "DKA", "HHS", "ketone"),
+    "HHNK": ("HHS", "hyperosmolar hyperglycemic state", "hyperglycemic hyperosmolar state", "hyperglycemic crises", "DKA", "intravenous fluids", "insulin", "electrolytes"),
+    "hhnk": ("HHS", "hyperosmolar hyperglycemic state", "hyperglycemic hyperosmolar state", "hyperglycemic crises", "DKA", "intravenous fluids", "insulin", "electrolytes"),
+    "高滲透壓": ("HHS", "hyperosmolar hyperglycemic state", "hyperglycemic hyperosmolar state", "hyperglycemic crises", "serum osmolality", "intravenous fluids"),
+    "高血糖高滲透壓": ("HHS", "hyperosmolar hyperglycemic state", "hyperglycemic hyperosmolar state", "hyperglycemic crises", "serum osmolality", "intravenous fluids"),
     "處理": ("treatment", "management", "recommendation", "action", "recheck", "repeat"),
     "治療": ("treatment", "therapy", "management", "recommendation"),
     "控制": ("goal", "target", "glycemic goals", "A1C", "blood glucose", "CGM", "BGM", "time in range"),
     "目標": ("goal", "target", "glycemic goals", "A1C goal", "glucose target", "time in range"),
     "血糖控制": ("glycemic goals", "glycemic management", "A1C", "CGM", "BGM", "time in range"),
     "血糖控制目標": ("glycemic goals", "A1C goal", "glucose target", "CGM metrics", "time in range"),
-    "酮酸": ("ketoacidosis", "DKA", "ketone"),
+    "酮酸": ("diabetic ketoacidosis", "ketoacidosis", "DKA", "ketone", "hyperglycemic crises", "intravenous fluids", "insulin", "electrolytes"),
+    "酮酸中毒": ("diabetic ketoacidosis", "DKA", "ketoacidosis", "hyperglycemic crises", "ketone", "anion gap", "acidosis", "intravenous fluids", "insulin", "electrolytes"),
     "飯": ("meal", "nutrition", "postprandial", "carbohydrate"),
     "飲食": ("nutrition", "diet", "medical nutrition therapy", "carbohydrate", "meal"),
     "運動": ("physical activity", "exercise", "sedentary", "fitness"),
@@ -116,6 +121,7 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "兒童": ("children", "adolescents", "pediatric", "youth"),
     "老人": ("older adults", "geriatric", "frailty"),
     "住院": ("hospital", "inpatient", "admission"),
+    "高血糖急症": ("hyperglycemic crises", "DKA", "diabetic ketoacidosis", "HHS", "hyperosmolar hyperglycemic state", "diagnostic criteria", "intravenous fluids", "insulin", "electrolytes"),
     "篩檢": ("screening", "diagnosis", "A1C", "fasting plasma glucose"),
     "診斷": ("diagnosis", "classification", "A1C", "OGTT", "diagnostic criteria"),
     "診斷標準": ("diagnostic criteria", "screening", "classification", "A1C", "fasting plasma glucose", "OGTT"),
@@ -531,6 +537,28 @@ class KnowledgeBase:
                         metadata=hit.metadata,
                         score=fused_score,
                     )
+        if "hyperglycemic_crisis" in query_concepts(query, query.lower()):
+            priority_queries = (
+                "dc26s016 Diabetic Ketoacidosis and Hyperglycemic Hyperosmolar State recommendation 16.16 HHS DKA intravenous fluids insulin electrolytes",
+                "dc26s016 Table 16.1 Diagnostic criteria for DKA and HHS ketones pH bicarbonate osmolality",
+            )
+            for priority_query in priority_queries:
+                for rank, hit in enumerate(self.search(priority_query, limit=max(limit, 10), excerpt_chars=excerpt_chars), start=1):
+                    key = hit_dedup_key(hit)
+                    fused_score = hit.score * 50.0 + 10000.0 / (rank + 1)
+                    existing = candidates.get(key)
+                    if not existing or fused_score > existing.score:
+                        candidates[key] = KnowledgeHit(
+                            source=hit.source,
+                            source_label=hit.source_label,
+                            title=hit.title,
+                            section=hit.section,
+                            chunk_type=hit.chunk_type,
+                            excerpt=hit.excerpt,
+                            parent_excerpt=hit.parent_excerpt,
+                            metadata=hit.metadata,
+                            score=fused_score,
+                        )
         return coverage_rerank_hits(query, list(candidates.values()), limit)
 
     def _score(self, query_tokens: list[str], chunk: KnowledgeChunk) -> float:
@@ -1622,6 +1650,27 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
     if expansion_terms:
         variants.append(QueryVariant("synonyms", " ".join([query, *dedupe_terms(expansion_terms)]), 0.9))
 
+    hyperglycemic_crisis_query = any(term in query for term in ("HHNK", "高滲透壓", "高血糖高滲透壓", "高血糖急症", "酮酸", "酮酸中毒")) or any(
+        term in query_lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
+    )
+    if hyperglycemic_crisis_query:
+        variants.extend(
+            [
+                QueryVariant(
+                    "hhs_diagnosis",
+                    f"{query} ADA section 16 dc26s016 hyperglycemic crises HHS hyperosmolar hyperglycemic state diagnostic criteria Table 16.1 plasma glucose serum osmolality ketones pH bicarbonate",
+                    1.02,
+                ),
+                QueryVariant(
+                    "hhs_treatment",
+                    f"{query} ADA recommendation 16.16 DKA HHS treatment intravenous fluids insulin electrolytes potassium monitoring transition subcutaneous insulin precipitating cause Figure 16.1",
+                    1.02,
+                ),
+            ]
+        )
+    for index, brain_query in enumerate(brain_plan.get("search_queries", [])[:4], start=1):
+        variants.append(QueryVariant(f"clinical_brain_{index}", f"{query} {brain_query}", 0.92))
+
     for triggers, intent_queries in QUERY_INTENT_VARIANTS:
         if any(trigger in query or trigger in query_lower for trigger in triggers):
             variants.extend(QueryVariant("section_intent", f"{query} {intent_query}", 0.84) for intent_query in intent_queries)
@@ -1630,8 +1679,6 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
             QueryVariant(f"keyword_{entry.module}_{entry.entry_id}", f"{query} {variant_query}", 0.84)
             for variant_query in entry.variant_queries[:2]
         )
-    for index, brain_query in enumerate(brain_plan.get("search_queries", [])[:4], start=1):
-        variants.append(QueryVariant(f"clinical_brain_{index}", f"{query} {brain_query}", 0.9))
 
     pregnancy_query = any(term in query for term in ("懷孕", "妊娠", "孕")) or any(
         term in query_lower for term in ("pregnancy", "gestational", "gdm")
@@ -1669,6 +1716,21 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
                 ),
             ]
         )
+    if hyperglycemic_crisis_query:
+        variants.extend(
+            [
+                QueryVariant(
+                    "hhs_diagnosis",
+                    f"{query} ADA section 16 dc26s016 hyperglycemic crises HHS hyperosmolar hyperglycemic state diagnostic criteria Table 16.1 plasma glucose serum osmolality ketones pH bicarbonate",
+                    0.96,
+                ),
+                QueryVariant(
+                    "hhs_treatment",
+                    f"{query} ADA recommendation 16.16 DKA HHS treatment intravenous fluids insulin electrolytes potassium monitoring transition subcutaneous insulin precipitating cause Figure 16.1",
+                    0.96,
+                ),
+            ]
+        )
 
     variants.extend(coverage_query_variants(query, query_lower))
     variants.extend(concept_route_variants(query, query_lower))
@@ -1686,7 +1748,8 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
         if compact and key not in seen:
             seen.add(key)
             deduped.append(QueryVariant(variant.label, compact, variant.weight))
-    return deduped[:14]
+    variant_limit = max(8, int(os.getenv("LINE_KNOWLEDGE_QUERY_VARIANT_LIMIT", "24")))
+    return deduped[:variant_limit]
 
 
 def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
@@ -1730,6 +1793,21 @@ def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
                     "concept_pad_foot",
                     f"{query} ADA section 12 dc26s012 peripheral artery disease PAD lower extremity pulses claudication rest pain ABI toe pressures vascular assessment revascularization diabetic foot ulcer gangrene amputation semaglutide STRIDE lower-extremity complications",
                     0.94,
+                ),
+            ]
+        )
+    if "hyperglycemic_crisis" in concepts:
+        variants.extend(
+            [
+                QueryVariant(
+                    "concept_hhs_diagnosis",
+                    f"{query} ADA section 16 dc26s016 Diabetes Care in the Hospital hyperglycemic crises HHS hyperosmolar hyperglycemic state diagnostic criteria Table 16.1 plasma glucose osmolality ketones pH bicarbonate DKA",
+                    0.98,
+                ),
+                QueryVariant(
+                    "concept_hhs_treatment",
+                    f"{query} ADA recommendation 16.16 manage DKA HHS intravenous fluids insulin electrolytes monitoring transition maintenance subcutaneous insulin precipitating cause Figure 16.1",
+                    0.98,
                 ),
             ]
         )
@@ -1803,6 +1881,24 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
             "MASLD MASH NAFLD NASH steatotic liver disease diabetes obesity fibrosis cirrhosis GLP-1 receptor agonist tirzepatide pioglitazone weight loss"
         ],
     },
+    "hyperglycemic_crisis": {
+        "concepts": ["HHS", "hyperosmolar hyperglycemic state", "hyperglycemic crises", "DKA"],
+        "target_chapters": ["ADA S16 Diabetes Care in the Hospital", "ADA S6 Glycemic Goals and Hyperglycemic Crises"],
+        "evidence_targets": [
+            "diagnostic criteria for DKA and HHS",
+            "plasma glucose, ketones, pH or bicarbonate, and serum osmolality",
+            "intravenous fluids, insulin, and electrolytes",
+            "monitoring during treatment",
+            "bridged transition to subcutaneous insulin",
+            "identify and treat precipitating cause",
+        ],
+        "avoid_routes": ["do not answer HHNK/HHS from GDM or outpatient diagnosis criteria"],
+        "required_facets": ["diagnosis", "treatment"],
+        "search_queries": [
+            "ADA section 16 dc26s016 hyperglycemic crises HHS hyperosmolar hyperglycemic state DKA diagnostic criteria Table 16.1 intravenous fluids insulin electrolytes Figure 16.1",
+            "hyperglycemic hyperosmolar state HHS diagnosis treatment fluids insulin electrolytes osmolality potassium transition subcutaneous insulin",
+        ],
+    },
 }
 
 
@@ -1821,6 +1917,10 @@ def clinical_search_brain_plan(query: str) -> dict[str, list[str]]:
         term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
     ):
         concepts.add("liver")
+    if any(term in query for term in ("HHNK", "高滲透壓", "高血糖高滲透壓", "高血糖急症", "酮酸", "酮酸中毒")) or any(
+        term in lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
+    ):
+        concepts.add("hyperglycemic_crisis")
 
     plan: dict[str, list[str]] = {
         "concepts": [],
@@ -1881,6 +1981,10 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
         term in lower for term in ("treatment", "therapy", "intervention", "anti-vegf", "photocoagulation", "vitrectomy")
     ):
         concepts.add("treatment")
+    if any(term in query for term in ("HHNK", "高滲透壓", "高血糖高滲透壓", "高血糖急症", "酮酸", "酮酸中毒")) or any(
+        term in lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
+    ):
+        concepts.add("hyperglycemic_crisis")
     return concepts
 
 
@@ -2318,6 +2422,9 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         any(term in query for term in ("診斷", "篩檢", "標準"))
         or any(term in query_lower for term in ("diagnosis", "screening", "criteria", "ogtt"))
     )
+    hyperglycemic_crisis_query = any(term in query for term in ("HHNK", "高滲透壓", "高血糖高滲透壓", "高血糖急症", "酮酸", "酮酸中毒")) or any(
+        term in query_lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
+    )
     liver_query = any(term in query for term in ("肝", "脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
         term in query_lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
     )
@@ -2350,6 +2457,17 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         haystack,
     ):
         adjustment *= 0.18
+    if hyperglycemic_crisis_query and re.search(r"\b(gdm|gestational diabetes|pregnancy)\b", haystack):
+        adjustment *= 0.12
+    if hyperglycemic_crisis_query and ("dc26s016" in haystack or "diabetes care in the hospital" in haystack):
+        adjustment *= 5.0
+    if hyperglycemic_crisis_query and ("dc26s006" in haystack or "hyperglycemic crises" in haystack):
+        adjustment *= 2.4
+    if hyperglycemic_crisis_query and re.search(
+        r"\b(dka|diabetic ketoacidosis|hhs|hyperosmolar|hyperglycemic crises|intravenous fluids|insulin|electrolytes|potassium|osmolality|ketones|bicarbonate|anion gap|acidosis|subcutaneous insulin|precipitating cause)\b",
+        haystack,
+    ):
+        adjustment *= 4.2
     if re.search(r"\b(recommendation|recommendations|treatment|therapy|selection|screening|diagnosis|pharmacologic|management|interventions)\b", haystack):
         adjustment *= 1.18
     if re.search(r"\b(egfr|albuminuria|uacr|mg/g|ml/min|contraindicat|avoid|dose|dosage|adjust|threshold|initiat|discontinu)\b", haystack):

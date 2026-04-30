@@ -13,10 +13,11 @@
     },
     {
       "id": "hyperglycemic_crises",
-      "triggers": ["酮酸", "DKA", "HHS", "酮體", "ketone", "高血糖急症"],
-      "expansions": ["DKA", "diabetic ketoacidosis", "HHS", "hyperosmolar hyperglycemic state", "ketone", "hyperglycemic crises", "dehydration", "insulin deficiency", "SGLT2 inhibitor", "euglycemic DKA", "hospital", "emergency"],
+      "triggers": ["酮酸", "酮酸中毒", "DKA", "HHNK", "HHS", "高滲透壓", "高血糖高滲透壓", "酮體", "ketone", "高血糖急症"],
+      "expansions": ["DKA", "diabetic ketoacidosis", "HHS", "HHNK", "hyperosmolar hyperglycemic state", "hyperglycemic hyperosmolar state", "ketone", "hyperglycemic crises", "dehydration", "insulin deficiency", "SGLT2 inhibitor", "euglycemic DKA", "hospital", "emergency", "intravenous fluids", "insulin", "electrolytes", "potassium", "osmolality", "anion gap", "bicarbonate"],
       "variant_queries": [
-        "DKA diabetic ketoacidosis HHS hyperosmolar hyperglycemic state ketone hyperglycemic crises treatment",
+        "ADA section 16 dc26s016 DKA diabetic ketoacidosis HHS hyperosmolar hyperglycemic state hyperglycemic crises diagnostic criteria Table 16.1 treatment",
+        "DKA HHS treatment intravenous fluids insulin electrolytes potassium monitoring transition subcutaneous insulin precipitating cause",
         "SGLT2 inhibitor euglycemic DKA acute illness dehydration insulin deficiency emergency"
       ]
     },

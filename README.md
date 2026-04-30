@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-01-fast-index-v23
+APP_VERSION=2026-05-01-no-multiagent-hermes-brain-v24
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -70,7 +70,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-01-fast-index-v23
+APP_VERSION=2026-05-01-no-multiagent-hermes-brain-v24
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -264,6 +264,12 @@ Per message, the flow is:
 
 The final answer prompt still forbids the configured model from using built-in medical
 knowledge, unmounted guidelines, news, or unsupported inference.
+
+This version does not use the conditional multi-agent pipeline. The Hermes clinical
+search brain runs before retrieval only, translating clinical language such as
+`HHNK` to `HHS / hyperosmolar hyperglycemic state` and `酮酸中毒` to
+`DKA / diabetic ketoacidosis`, then routing the search to the appropriate guideline
+chapters such as ADA S16.
 
 ## Keyword Modules
 
@@ -462,7 +468,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-01-fast-index-v23",
+  "app_version": "2026-05-01-no-multiagent-hermes-brain-v24",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {

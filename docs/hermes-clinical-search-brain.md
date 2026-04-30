@@ -31,6 +31,8 @@ required_facets
 search_queries
 ```
 
+這不是 multi-agent pipeline。它只在 retrieval 前做概念翻譯與章節路由，不在 retrieval 後否決答案。
+
 ## PAD 例子
 
 對「下肢動脈阻塞」類問題，brain plan 會導向：
@@ -87,12 +89,49 @@ Clinical Search Brain 是：
 
 都應該進同一個 clinical concept。
 
+## Hyperglycemic Crisis 例子
+
+對「HHNK」、「HHS」、「高滲透壓」、「酮酸中毒」、「DKA」類問題，brain plan 會導向：
+
+```text
+concept:
+- hyperglycemic crises
+- DKA / diabetic ketoacidosis
+- HHS / hyperosmolar hyperglycemic state
+
+target_chapters:
+- ADA S16 Diabetes Care in the Hospital
+- ADA S6 Glycemic Goals, Hypoglycemia, and Hyperglycemic Crises
+
+evidence_targets:
+- DKA/HHS diagnostic criteria
+- Table 16.1
+- intravenous fluids
+- insulin
+- electrolytes / potassium
+- osmolality / ketones / pH / bicarbonate
+- transition to subcutaneous insulin
+- precipitating cause
+
+avoid_routes:
+- do not answer HHNK/HHS/DKA from GDM criteria
+- do not answer from generic glucose-lowering medication tables alone
+```
+
+這解決的是「臨床舊稱或中文口語」和「guideline 正式用語」不同的問題：
+
+```text
+HHNK → HHS / hyperosmolar hyperglycemic state
+酮酸中毒 → DKA / diabetic ketoacidosis
+高血糖急症 → hyperglycemic crises
+```
+
 ## 目前版本
 
 目前版本：
 
 ```text
-2026-05-01-clinical-brain-v22
+2026-05-01-no-multiagent-hermes-brain-v24
 ```
 
 相關 feature flag：
@@ -100,4 +139,3 @@ Clinical Search Brain 是：
 ```json
 "hermes_clinical_search_brain": true
 ```
-
