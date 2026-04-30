@@ -283,6 +283,52 @@ https://<your-zeabur-domain>/line/webhook
 The previous local Hermes bridge can stay available for testing, but the fast
 QA production webhook should point to this Zeabur service.
 
+## Zeabur Deployment Repo
+
+Zeabur is expected to bind the fork under the `zinojeng` GitHub account:
+
+```text
+https://github.com/zinojeng/line-lifebot-qa
+```
+
+The original working repo remains:
+
+```text
+https://github.com/clawbot4ander-design/line-lifebot-qa
+```
+
+On the Mac mini, keep two remotes:
+
+```bash
+git remote add zeabur https://github.com/zinojeng/line-lifebot-qa.git
+```
+
+If the `zeabur` remote already exists:
+
+```bash
+git remote set-url zeabur https://github.com/zinojeng/line-lifebot-qa.git
+```
+
+After each code change, push both remotes:
+
+```bash
+git push origin main && git push zeabur main
+```
+
+`origin` updates the original repo. `zeabur` updates the fork that triggers
+Zeabur auto deploy.
+
+Zeabur source settings should be:
+
+```text
+Repository: zinojeng/line-lifebot-qa
+Branch: main
+Root directory: blank
+Monitor path: *
+Dockerfile override: blank
+ENTRYPOINT/CMD: blank
+```
+
 ## Local Test
 
 ```bash
