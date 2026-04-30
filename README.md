@@ -212,6 +212,47 @@ Per message, the flow is:
 The final answer prompt still forbids the configured model from using built-in medical
 knowledge, unmounted guidelines, news, or unsupported inference.
 
+## Keyword Modules
+
+Important guideline retrieval terms live in JSON modules under `keywords/`.
+These files are loaded automatically and used for query expansion, source-aware
+retrieval, and coverage-oriented search variants.
+
+Current modules:
+
+```text
+keywords/core_diabetes_ada_aace.json
+keywords/ckd_kdigo.json
+keywords/complications_special_populations.json
+```
+
+The modules cover ADA/AACE diabetes care terms, KDIGO CKD terms, and
+cross-guideline special populations/safety terms. They connect Chinese user
+language with guideline terms such as `MASLD`, `MASH`, `NAFLD`, `NASH`, `CKD`,
+`DKD`, `eGFR`, `UACR`, `SGLT2 inhibitor`, `GLP-1 RA`, `finerenone`, `ASCVD`,
+`heart failure`, `hypoglycemia`, `GDM`, `older adults`, `perioperative`, and
+`foot care`.
+
+Each entry uses this shape:
+
+```json
+{
+  "id": "ckd_staging_albuminuria",
+  "triggers": ["腎", "CKD", "eGFR"],
+  "expansions": ["chronic kidney disease", "UACR", "albuminuria"],
+  "variant_queries": ["KDIGO CKD classification eGFR albuminuria UACR"]
+}
+```
+
+Optional additional keyword files can be mounted with:
+
+```bash
+LINE_KEYWORD_PATHS=/app/data/keywords
+```
+
+The health check reports `knowledge.keyword_files` and
+`knowledge.keyword_entries` so deployment can verify the modules are loaded.
+
 ## LINE User Name Memory
 
 The webhook can remember one display name per LINE `source.userId`.

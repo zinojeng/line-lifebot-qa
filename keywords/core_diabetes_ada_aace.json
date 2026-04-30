@@ -1,0 +1,78 @@
+{
+  "name": "core_diabetes_ada_aace",
+  "description": "Core ADA/AACE diabetes-care retrieval keywords for diagnosis, glycemic targets, pharmacologic treatment, cardiometabolic disease, obesity, MASLD/MASH, and diabetes technology.",
+  "entries": [
+    {
+      "id": "diagnosis_classification",
+      "triggers": ["診斷", "篩檢", "糖尿病前期", "第一型", "第二型", "type 1", "type 2", "prediabetes", "diagnosis", "screening", "classification"],
+      "expansions": ["diagnosis", "classification", "screening", "prediabetes", "type 1 diabetes", "type 2 diabetes", "A1C", "HbA1c", "fasting plasma glucose", "FPG", "OGTT", "random plasma glucose", "autoantibodies", "LADA", "GAD", "C-peptide"],
+      "variant_queries": [
+        "diagnosis classification screening A1C fasting plasma glucose OGTT random plasma glucose diagnostic criteria",
+        "type 1 diabetes type 2 diabetes prediabetes autoimmune diabetes autoantibodies C-peptide LADA"
+      ]
+    },
+    {
+      "id": "glycemic_targets_monitoring",
+      "triggers": ["血糖目標", "血糖控制", "A1C", "HbA1c", "連續血糖", "血糖機", "CGM", "BGM", "time in range", "TIR"],
+      "expansions": ["glycemic goals", "A1C goal", "individualized targets", "CGM", "BGM", "SMBG", "time in range", "TIR", "time below range", "TBR", "time above range", "TAR", "GMI", "glucose management indicator", "hypoglycemia risk"],
+      "variant_queries": [
+        "glycemic goals individualized A1C targets hypoglycemia risk comorbidities life expectancy",
+        "CGM BGM SMBG time in range TIR time below range TBR time above range TAR GMI"
+      ]
+    },
+    {
+      "id": "glucose_lowering_medications",
+      "triggers": ["降血糖藥", "糖尿病藥", "用藥", "藥物", "metformin", "sglt", "glp", "胰島素", "insulin", "tirzepatide", "semaglutide"],
+      "expansions": ["pharmacologic treatment", "glucose-lowering therapy", "metformin", "SGLT2 inhibitor", "GLP-1 receptor agonist", "GLP-1 RA", "dual GIP and GLP-1 receptor agonist", "tirzepatide", "semaglutide", "dulaglutide", "liraglutide", "insulin", "basal insulin", "prandial insulin", "sulfonylurea", "DPP-4 inhibitor", "TZD", "pioglitazone", "hypoglycemia risk", "weight effects", "cardiorenal benefit"],
+      "variant_queries": [
+        "pharmacologic approaches glucose-lowering therapy metformin SGLT2 inhibitor GLP-1 RA tirzepatide insulin hypoglycemia weight cardiorenal",
+        "AACE algorithm type 2 diabetes medication hierarchy complications-centric care obesity ASCVD heart failure CKD"
+      ]
+    },
+    {
+      "id": "cardiovascular_risk",
+      "triggers": ["心血管", "心臟", "ASCVD", "冠心病", "中風", "血壓", "膽固醇", "statin", "lipid", "hypertension"],
+      "expansions": ["ASCVD", "atherosclerotic cardiovascular disease", "MACE", "myocardial infarction", "stroke", "heart failure", "blood pressure", "hypertension", "lipid management", "statin", "LDL-C", "triglycerides", "antiplatelet", "cardiorenal risk", "SGLT2 inhibitor", "GLP-1 RA"],
+      "variant_queries": [
+        "cardiovascular disease risk management ASCVD MACE myocardial infarction stroke blood pressure hypertension lipid statin LDL-C",
+        "cardiorenal benefit SGLT2 inhibitor GLP-1 receptor agonist heart failure CKD ASCVD risk"
+      ]
+    },
+    {
+      "id": "heart_failure",
+      "triggers": ["心衰竭", "HF", "HFrEF", "HFpEF", "heart failure"],
+      "expansions": ["heart failure", "HF", "HFrEF", "HFpEF", "heart failure hospitalization", "SGLT2 inhibitor", "cardiorenal", "volume depletion", "diuretic", "kidney function"],
+      "variant_queries": [
+        "heart failure HFrEF HFpEF heart failure hospitalization SGLT2 inhibitor diabetes treatment",
+        "cardiorenal risk heart failure CKD volume depletion kidney function diabetes"
+      ]
+    },
+    {
+      "id": "obesity_weight_management",
+      "triggers": ["肥胖", "體重", "減重", "BMI", "obesity", "weight", "metabolic surgery", "bariatric"],
+      "expansions": ["obesity", "overweight", "BMI", "weight management", "lifestyle", "nutrition", "physical activity", "anti-obesity medication", "GLP-1 RA", "dual GIP and GLP-1 RA", "tirzepatide", "semaglutide", "metabolic surgery", "bariatric surgery"],
+      "variant_queries": [
+        "obesity weight management lifestyle anti-obesity medication GLP-1 RA tirzepatide semaglutide diabetes",
+        "metabolic surgery bariatric surgery BMI diabetes remission weight loss cardiometabolic risk"
+      ]
+    },
+    {
+      "id": "masld_mash_liver",
+      "triggers": ["脂肪肝", "代謝性脂肪肝", "脂肪性肝炎", "肝硬化", "肝纖維", "MASLD", "MASH", "NAFLD", "NASH", "steatotic liver", "steatohepatitis"],
+      "expansions": ["MASLD", "metabolic dysfunction-associated steatotic liver disease", "MASH", "metabolic dysfunction-associated steatohepatitis", "NAFLD", "NASH", "steatotic liver disease", "steatohepatitis", "FIB-4", "liver fibrosis", "advanced fibrosis", "cirrhosis", "compensated cirrhosis", "GLP-1 RA", "pioglitazone", "tirzepatide", "weight loss", "resmetirom"],
+      "variant_queries": [
+        "MASLD MASH NAFLD NASH steatotic liver disease diabetes FIB-4 fibrosis cirrhosis screening management",
+        "MASH treatment GLP-1 receptor agonist pioglitazone tirzepatide weight loss resmetirom compensated cirrhosis"
+      ]
+    },
+    {
+      "id": "technology_devices",
+      "triggers": ["科技", "胰島素幫浦", "幫浦", "CGM", "AID", "閉環", "sensor", "pump"],
+      "expansions": ["diabetes technology", "CGM", "continuous glucose monitoring", "BGM", "insulin pump", "CSII", "automated insulin delivery", "AID", "hybrid closed loop", "sensor-augmented pump", "smart insulin pen", "connected insulin pen"],
+      "variant_queries": [
+        "diabetes technology CGM BGM insulin pump automated insulin delivery AID hybrid closed loop",
+        "continuous glucose monitoring sensor smart insulin pen connected insulin pen insulin dosing"
+      ]
+    }
+  ]
+}

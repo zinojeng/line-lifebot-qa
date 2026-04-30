@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import html
+import json
 from pathlib import Path
 import hashlib
 import math
@@ -18,6 +19,7 @@ DEFAULT_KNOWLEDGE_DIRS = (
     "/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines"
 )
 DEFAULT_EXTRA_KNOWLEDGE_PATHS = ""
+DEFAULT_KEYWORD_DIR = Path(__file__).resolve().parent / "keywords"
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+-]*|\d+(?:\.\d+)?|[\u4e00-\u9fff]{1,4}")
 HEADING_RE = re.compile(r"^#{1,4}\s+(.+)$")
@@ -271,6 +273,15 @@ class QueryVariant:
     weight: float = 0.82
 
 
+@dataclass(frozen=True)
+class KeywordEntry:
+    module: str
+    entry_id: str
+    triggers: tuple[str, ...]
+    expansions: tuple[str, ...]
+    variant_queries: tuple[str, ...]
+
+
 class KnowledgeBase:
     def __init__(self, roots: list[Path], extra_paths: list[Path] | None = None, chunk_chars: int = 1800) -> None:
         self.roots = roots
@@ -445,6 +456,8 @@ class KnowledgeBase:
 _knowledge_lock = threading.Lock()
 _knowledge_cache: KnowledgeBase | None = None
 _knowledge_cache_key: tuple[str, int] | None = None
+_keyword_lock = threading.Lock()
+_keyword_cache: tuple[tuple[str, ...], list[KeywordEntry]] | None = None
 
 
 def knowledge_enabled() -> bool:
@@ -510,6 +523,79 @@ def extra_knowledge_paths() -> list[Path]:
     if raw.strip().lower() in {"", "0", "false", "no", "off"}:
         return []
     return [Path(part.strip()).expanduser() for part in re.split(r"[,;\n]+", raw) if part.strip()]
+
+
+def keyword_paths() -> list[Path]:
+    raw = os.getenv("LINE_KEYWORD_PATHS", "")
+    paths = [DEFAULT_KEYWORD_DIR]
+    if raw.strip().lower() not in {"", "0", "false", "no", "off"}:
+        paths.extend(Path(part.strip()).expanduser() for part in re.split(r"[,;\n]+", raw) if part.strip())
+    return paths
+
+
+def keyword_files() -> list[Path]:
+    files: list[Path] = []
+    for path in keyword_paths():
+        if path.exists() and path.is_dir():
+            files.extend(sorted(item for item in path.glob("*.json") if item.is_file()))
+        elif path.exists() and path.is_file() and path.suffix.lower() == ".json":
+            files.append(path)
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in files:
+        key = str(path.resolve())
+        if key not in seen:
+            seen.add(key)
+            deduped.append(path)
+    return deduped
+
+
+def load_keyword_entries() -> list[KeywordEntry]:
+    files = keyword_files()
+    cache_key = tuple(str(path.resolve()) for path in files)
+    global _keyword_cache
+    if _keyword_cache and _keyword_cache[0] == cache_key:
+        return _keyword_cache[1]
+    with _keyword_lock:
+        if _keyword_cache and _keyword_cache[0] == cache_key:
+            return _keyword_cache[1]
+        entries: list[KeywordEntry] = []
+        for path in files:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                print(f"keyword module load failed: {path}: {type(exc).__name__}: {exc}")
+                continue
+            module_name = str(payload.get("name") or path.stem)
+            for item in payload.get("entries", []):
+                if not isinstance(item, dict):
+                    continue
+                triggers = tuple(str(value).strip() for value in item.get("triggers", []) if str(value).strip())
+                expansions = tuple(str(value).strip() for value in item.get("expansions", []) if str(value).strip())
+                variant_queries = tuple(
+                    str(value).strip() for value in item.get("variant_queries", []) if str(value).strip()
+                )
+                if triggers and (expansions or variant_queries):
+                    entries.append(
+                        KeywordEntry(
+                            module=module_name,
+                            entry_id=str(item.get("id") or ""),
+                            triggers=triggers,
+                            expansions=expansions,
+                            variant_queries=variant_queries,
+                        )
+                    )
+        _keyword_cache = (cache_key, entries)
+        return entries
+
+
+def matched_keyword_entries(query: str) -> list[KeywordEntry]:
+    query_lower = query.lower()
+    matches: list[KeywordEntry] = []
+    for entry in load_keyword_entries():
+        if any(trigger in query or trigger.lower() in query_lower for trigger in entry.triggers):
+            matches.append(entry)
+    return matches
 
 
 def knowledge_source_files(roots: list[Path], extra_paths: list[Path]) -> list[Path]:
@@ -811,6 +897,8 @@ def knowledge_status() -> dict[str, object]:
         "sources": sorted({chunk.source_label for chunk in kb.chunks}) if kb else [],
         "source_file_counts": loaded_files_by_source,
         "source_dirs": loaded_dirs_by_source,
+        "keyword_files": [str(path) for path in keyword_files()],
+        "keyword_entries": len(load_keyword_entries()),
     }
 
 
@@ -853,12 +941,20 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
     for key, terms in QUERY_EXPANSIONS.items():
         if key in query:
             expansion_terms.extend(terms)
+    keyword_entries = matched_keyword_entries(query)
+    for entry in keyword_entries:
+        expansion_terms.extend(entry.expansions)
     if expansion_terms:
         variants.append(QueryVariant("synonyms", " ".join([query, *dedupe_terms(expansion_terms)]), 0.9))
 
     for triggers, intent_queries in QUERY_INTENT_VARIANTS:
         if any(trigger in query or trigger in query_lower for trigger in triggers):
             variants.extend(QueryVariant("section_intent", f"{query} {intent_query}", 0.84) for intent_query in intent_queries)
+    for entry in keyword_entries:
+        variants.extend(
+            QueryVariant(f"keyword_{entry.module}_{entry.entry_id}", f"{query} {variant_query}", 0.84)
+            for variant_query in entry.variant_queries[:2]
+        )
 
     pregnancy_query = any(term in query for term in ("懷孕", "妊娠", "孕")) or any(
         term in query_lower for term in ("pregnancy", "gestational", "gdm")
@@ -912,7 +1008,7 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
         if compact and key not in seen:
             seen.add(key)
             deduped.append(QueryVariant(variant.label, compact, variant.weight))
-    return deduped[:8]
+    return deduped[:14]
 
 
 def coverage_query_variants(query: str, query_lower: str) -> list[QueryVariant]:
@@ -1177,6 +1273,8 @@ def expand_query_tokens(query: str) -> Iterable[str]:
     for key, terms in QUERY_EXPANSIONS.items():
         if key in query:
             expanded.extend(terms)
+    for entry in matched_keyword_entries(query):
+        expanded.extend(entry.expansions)
     for token in tokenize(" ".join(expanded)):
         if token not in yielded:
             yielded.add(token)

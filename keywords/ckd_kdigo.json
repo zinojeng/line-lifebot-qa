@@ -1,0 +1,78 @@
+{
+  "name": "ckd_kdigo",
+  "description": "KDIGO-centered CKD and diabetes retrieval keywords for kidney staging, albuminuria, cardiorenal protection, medication thresholds, monitoring, and safety.",
+  "entries": [
+    {
+      "id": "ckd_staging_albuminuria",
+      "triggers": ["腎", "腎病變", "慢性腎臟病", "腎絲球", "尿蛋白", "白蛋白尿", "CKD", "DKD", "eGFR", "UACR", "albuminuria", "proteinuria"],
+      "expansions": ["CKD", "chronic kidney disease", "DKD", "diabetic kidney disease", "diabetes and CKD", "eGFR", "estimated glomerular filtration rate", "GFR category", "G1", "G2", "G3a", "G3b", "G4", "G5", "albuminuria", "UACR", "urine albumin-to-creatinine ratio", "proteinuria", "A1", "A2", "A3", "kidney failure", "dialysis", "kidney replacement therapy"],
+      "variant_queries": [
+        "KDIGO CKD classification eGFR GFR categories G1 G2 G3a G3b G4 G5 albuminuria A1 A2 A3 UACR",
+        "diabetic kidney disease DKD diabetes and CKD kidney failure dialysis kidney replacement therapy monitoring"
+      ]
+    },
+    {
+      "id": "sglt2_ckd",
+      "triggers": ["SGLT2", "sglt2", "腎臟保護", "cardiorenal", "eGFR 20", "egfr 20"],
+      "expansions": ["SGLT2 inhibitor", "SGLT2i", "cardiorenal protection", "kidney protection", "eGFR threshold", "initiation threshold", "continue SGLT2 inhibitor", "kidney disease progression", "heart failure", "albuminuria", "acute illness", "perioperative hold", "DKA risk", "volume depletion"],
+      "variant_queries": [
+        "KDIGO SGLT2 inhibitor diabetes CKD eGFR threshold initiation continuation albuminuria kidney protection",
+        "SGLT2 inhibitor safety CKD DKA acute illness perioperative hold volume depletion kidney function"
+      ]
+    },
+    {
+      "id": "finerenone_nsMRA",
+      "triggers": ["finerenone", "菲奈利酮", "MRA", "nsMRA", "nonsteroidal MRA", "礦物皮質素"],
+      "expansions": ["finerenone", "nonsteroidal mineralocorticoid receptor antagonist", "nsMRA", "MRA", "albuminuria", "UACR", "eGFR threshold", "potassium", "hyperkalemia", "ACE inhibitor", "ARB", "maximally tolerated RAS blockade", "kidney outcomes", "cardiovascular outcomes"],
+      "variant_queries": [
+        "KDIGO finerenone nsMRA diabetes CKD albuminuria UACR eGFR potassium hyperkalemia",
+        "nonsteroidal mineralocorticoid receptor antagonist ACE inhibitor ARB RAS blockade kidney cardiovascular outcomes"
+      ]
+    },
+    {
+      "id": "ras_blockade_blood_pressure",
+      "triggers": ["ACEI", "ARB", "ACE inhibitor", "血壓", "高血壓", "RAS", "RAAS", "renin angiotensin"],
+      "expansions": ["ACE inhibitor", "ARB", "RAS inhibitor", "RAAS blockade", "renin-angiotensin system", "blood pressure", "hypertension", "albuminuria", "UACR", "serum creatinine", "potassium", "hyperkalemia", "kidney protection"],
+      "variant_queries": [
+        "KDIGO ACE inhibitor ARB RAS blockade diabetes CKD hypertension albuminuria UACR potassium creatinine",
+        "blood pressure management diabetes CKD albuminuria kidney protection hypertension treatment"
+      ]
+    },
+    {
+      "id": "metformin_ckd",
+      "triggers": ["metformin", "二甲雙胍", "腎功能 metformin", "eGFR metformin"],
+      "expansions": ["metformin", "eGFR", "renal function", "dose adjustment", "contraindication", "lactic acidosis", "advanced CKD", "acute illness", "contrast", "temporary discontinuation"],
+      "variant_queries": [
+        "metformin diabetes CKD eGFR renal function dose adjustment contraindication lactic acidosis",
+        "metformin acute illness contrast advanced CKD temporary discontinuation kidney function"
+      ]
+    },
+    {
+      "id": "glp1_ckd",
+      "triggers": ["GLP", "GLP-1", "腎功能 GLP", "semaglutide", "liraglutide", "dulaglutide"],
+      "expansions": ["GLP-1 receptor agonist", "GLP-1 RA", "semaglutide", "liraglutide", "dulaglutide", "CKD", "cardiovascular benefit", "kidney outcomes", "albuminuria", "weight loss", "hypoglycemia risk", "gastrointestinal adverse effects"],
+      "variant_queries": [
+        "GLP-1 receptor agonist diabetes CKD cardiovascular benefit kidney outcomes albuminuria weight loss",
+        "semaglutide liraglutide dulaglutide CKD hypoglycemia risk gastrointestinal adverse effects"
+      ]
+    },
+    {
+      "id": "insulin_hypoglycemia_ckd",
+      "triggers": ["胰島素 腎", "低血糖 腎", "洗腎 低血糖", "insulin CKD", "hypoglycemia CKD"],
+      "expansions": ["insulin", "advanced CKD", "kidney failure", "dialysis", "hypoglycemia risk", "insulin clearance", "dose adjustment", "CGM", "BGM", "A1C reliability", "glycated albumin", "fructosamine"],
+      "variant_queries": [
+        "advanced CKD insulin hypoglycemia risk dialysis kidney failure insulin clearance dose adjustment",
+        "A1C reliability CKD dialysis CGM BGM glycated albumin fructosamine hypoglycemia"
+      ]
+    },
+    {
+      "id": "ckd_monitoring_safety",
+      "triggers": ["追蹤 腎", "監測 腎", "UACR 多久", "eGFR 多久", "急性病", "手術 腎", "contrast"],
+      "expansions": ["monitoring", "eGFR monitoring", "UACR monitoring", "albuminuria monitoring", "1-4 times per year", "sick day", "acute illness", "perioperative", "contrast", "AKI", "acute kidney injury", "hyperkalemia", "volume depletion", "pregnancy", "older adults"],
+      "variant_queries": [
+        "KDIGO CKD monitoring eGFR UACR albuminuria frequency risk category diabetes",
+        "CKD safety acute illness sick day perioperative contrast AKI hyperkalemia volume depletion older adults pregnancy"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "name": "complications_special_populations",
+  "description": "Cross-guideline diabetes complications, special populations, and safety retrieval keywords for ADA/AACE/KDIGO coverage checks.",
+  "entries": [
+    {
+      "id": "hypoglycemia",
+      "triggers": ["低血糖", "冒冷汗", "手抖", "hypoglycemia", "glucagon"],
+      "expansions": ["hypoglycemia", "level 1 hypoglycemia", "level 2 hypoglycemia", "level 3 hypoglycemia", "severe hypoglycemia", "impaired awareness of hypoglycemia", "glucose", "fast-acting carbohydrate", "15 minutes", "glucagon", "CGM", "hypoglycemia risk"],
+      "variant_queries": [
+        "hypoglycemia treatment level 1 level 2 level 3 severe hypoglycemia glucose fast-acting carbohydrate glucagon",
+        "hypoglycemia risk impaired awareness CGM insulin sulfonylurea older adults CKD"
+      ]
+    },
+    {
+      "id": "hyperglycemic_crises",
+      "triggers": ["酮酸", "DKA", "HHS", "酮體", "ketone", "高血糖急症"],
+      "expansions": ["DKA", "diabetic ketoacidosis", "HHS", "hyperosmolar hyperglycemic state", "ketone", "hyperglycemic crises", "dehydration", "insulin deficiency", "SGLT2 inhibitor", "euglycemic DKA", "hospital", "emergency"],
+      "variant_queries": [
+        "DKA diabetic ketoacidosis HHS hyperosmolar hyperglycemic state ketone hyperglycemic crises treatment",
+        "SGLT2 inhibitor euglycemic DKA acute illness dehydration insulin deficiency emergency"
+      ]
+    },
+    {
+      "id": "retinopathy_eye",
+      "triggers": ["眼", "視網膜", "眼底", "黃斑", "retinopathy", "macular edema"],
+      "expansions": ["diabetic retinopathy", "retinal photography", "dilated eye examination", "ophthalmologist", "macular edema", "anti-VEGF", "laser photocoagulation", "vitrectomy", "pregnancy retinopathy", "screening interval"],
+      "variant_queries": [
+        "diabetic retinopathy screening dilated eye examination retinal photography ophthalmologist interval",
+        "macular edema anti-VEGF laser photocoagulation vitrectomy pregnancy retinopathy"
+      ]
+    },
+    {
+      "id": "neuropathy_foot",
+      "triggers": ["腳", "足", "神經病變", "麻", "傷口", "潰瘍", "foot", "neuropathy", "ulcer"],
+      "expansions": ["diabetic neuropathy", "peripheral neuropathy", "autonomic neuropathy", "foot care", "foot ulcer", "loss of protective sensation", "LOPS", "monofilament", "vibration", "peripheral arterial disease", "PAD", "podiatrist", "amputation", "Charcot"],
+      "variant_queries": [
+        "diabetic neuropathy foot care foot ulcer monofilament loss of protective sensation peripheral arterial disease",
+        "autonomic neuropathy PAD podiatrist amputation Charcot screening referral"
+      ]
+    },
+    {
+      "id": "pregnancy_gdm",
+      "triggers": ["懷孕", "妊娠", "孕婦", "妊娠糖尿病", "GDM", "pregnancy", "gestational"],
+      "expansions": ["pregnancy", "preconception", "gestational diabetes mellitus", "GDM", "screening", "OGTT", "one-step strategy", "two-step strategy", "24-28 weeks", "insulin", "CGM", "retinopathy monitoring", "postpartum", "breastfeeding"],
+      "variant_queries": [
+        "pregnancy diabetes preconception glycemic goals insulin CGM retinopathy monitoring",
+        "gestational diabetes mellitus GDM screening OGTT one-step two-step 24-28 weeks postpartum"
+      ]
+    },
+    {
+      "id": "older_adults_frailty",
+      "triggers": ["老人", "長者", "高齡", "衰弱", "失智", "older adults", "frailty", "cognitive"],
+      "expansions": ["older adults", "frailty", "cognitive impairment", "functional status", "life expectancy", "complex health", "very complex health", "deintensification", "simplification", "hypoglycemia risk", "A1C goal", "CGM", "BGM", "long-term care"],
+      "variant_queries": [
+        "older adults diabetes frailty cognitive impairment functional status life expectancy A1C goals hypoglycemia",
+        "deintensification simplification long-term care CGM BGM complex health very complex health"
+      ]
+    },
+    {
+      "id": "children_adolescents",
+      "triggers": ["兒童", "青少年", "小孩", "孩子", "pediatric", "children", "adolescents", "youth"],
+      "expansions": ["children", "adolescents", "youth", "pediatric", "type 1 diabetes", "type 2 diabetes in youth", "school", "growth", "puberty", "CGM", "insulin pump", "hypoglycemia", "DKA", "family support"],
+      "variant_queries": [
+        "children adolescents youth pediatric diabetes school growth puberty CGM insulin pump hypoglycemia DKA",
+        "type 1 diabetes children type 2 diabetes youth family support psychosocial care"
+      ]
+    },
+    {
+      "id": "hospital_perioperative",
+      "triggers": ["住院", "開刀", "手術", "禁食", "perioperative", "hospital", "inpatient", "NPO"],
+      "expansions": ["hospital care", "inpatient", "perioperative", "surgery", "NPO", "critical illness", "noncritical illness", "insulin", "glucose target", "hypoglycemia", "hyperglycemia", "SGLT2 inhibitor hold", "metformin hold", "DKA", "transition of care"],
+      "variant_queries": [
+        "hospital inpatient diabetes glycemic management insulin glucose target critical illness noncritical illness",
+        "perioperative surgery NPO SGLT2 inhibitor hold metformin hold DKA transition of care"
+      ]
+    },
+    {
+      "id": "nutrition_activity_education",
+      "triggers": ["飲食", "營養", "碳水", "運動", "活動", "衛教", "nutrition", "diet", "exercise"],
+      "expansions": ["medical nutrition therapy", "MNT", "eating pattern", "carbohydrate", "protein", "fiber", "sodium", "Mediterranean", "low carbohydrate", "physical activity", "aerobic exercise", "resistance exercise", "sedentary time", "diabetes self-management education and support", "DSMES"],
+      "variant_queries": [
+        "medical nutrition therapy MNT eating patterns carbohydrate protein fiber sodium Mediterranean low carbohydrate",
+        "physical activity aerobic exercise resistance exercise sedentary time DSMES self-management education support"
+      ]
+    }
+  ]
+}
