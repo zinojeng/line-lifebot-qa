@@ -11,7 +11,6 @@ import os
 import re
 import sqlite3
 import threading
-import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -79,7 +78,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-multi-agent-v24")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-fast-index-v23")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -136,12 +135,6 @@ LINE_DEBUG_SEARCH_ENABLED = os.getenv("LINE_DEBUG_SEARCH_ENABLED", "1").strip().
     "no",
     "off",
 }
-LINE_MULTI_AGENT_ENABLED = os.getenv("LINE_MULTI_AGENT_ENABLED", "1").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
-}
 LINE_DEBUG_SEARCH_MAX_HITS = int(os.getenv("LINE_DEBUG_SEARCH_MAX_HITS", "12"))
 LINE_RETRIEVAL_QUERY_MAX_CHARS = int(os.getenv("LINE_RETRIEVAL_QUERY_MAX_CHARS", "1400"))
 LINE_TIMEOUT = int(os.getenv("LINE_TIMEOUT", "12"))
@@ -158,10 +151,6 @@ _memory_ready = False
 _memory_lock = threading.Lock()
 _session_locks: dict[str, threading.Lock] = {}
 _session_locks_guard = threading.Lock()
-
-
-def time_now_ms() -> int:
-    return int(time.perf_counter() * 1000)
 
 
 SYSTEM_PROMPT = """你是 LifeBot 糖尿病衛教 LINE 機器人，請用繁體中文回答病友問題。
@@ -990,163 +979,49 @@ def build_retrieval_query(
     return combined[:LINE_RETRIEVAL_QUERY_MAX_CHARS] or user_text
 
 
-ALLOWED_REQUIRED_FACETS = {
-    "kidney_context",
-    "medication",
-    "threshold",
-    "glycemic_target",
-    "a1c_reliability",
-    "monitoring",
-    "technology_indication",
-    "diagnosis",
-    "retinopathy_context",
-    "staging",
-    "pad_context",
-    "ascvd_context",
-    "pregnancy",
-    "hypoglycemia",
-    "treatment",
-    "foot_care",
-    "frequency",
-    "liver_context",
-}
-
-
-REGRESSION_QUESTIONS = [
-    {
-        "id": "pad_medication",
-        "question": "下肢的動脈阻塞的話，臨床證據顯示的藥物治療有哪些？",
-        "required_facets": ["pad_context", "ascvd_context", "treatment"],
-    },
-    {
-        "id": "retinopathy_staging_treatment",
-        "question": "糖尿病的視網膜病變，它的分期有哪些？要怎麼去有新的治療？",
-        "required_facets": ["retinopathy_context", "staging", "treatment"],
-    },
-    {
-        "id": "cgm_indication",
-        "question": "糖尿病的新科技——連續血糖監測，適用哪些病人呢？",
-        "required_facets": ["technology_indication", "monitoring"],
-    },
-    {
-        "id": "ckd_egfr25_medication",
-        "question": "T2D CKD eGFR 25 SGLT2 inhibitor metformin GLP-1 RA 怎麼選？",
-        "required_facets": ["kidney_context", "medication", "threshold"],
-    },
-    {
-        "id": "masld_treatment",
-        "question": "在脂肪性肝炎或 MASLD 合併糖尿病的治療建議是什麼？",
-        "required_facets": ["liver_context", "treatment"],
-    },
-]
-
-
-def required_evidence_facets(user_text: str, clinical_intent: dict[str, Any] | None = None) -> set[str]:
-    required = set(required_facets(user_text))
-    required.update(
-        facet
-        for facet in json_list((clinical_intent or {}).get("required_facets"))
-        if facet in ALLOWED_REQUIRED_FACETS
-    )
-    return required
-
-
-def evidence_coverage_agent(
-    user_text: str,
-    hits: list[KnowledgeHit],
-    clinical_intent: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    required = required_evidence_facets(user_text, clinical_intent)
-    covered: set[str] = set()
-    source_labels: set[str] = set()
-    sections: list[str] = []
-    chunk_types: dict[str, int] = {}
-    for hit in hits:
-        covered.update(hit_facets(hit))
-        source_labels.add(str(getattr(hit, "source_label", "")))
-        section = str(getattr(hit, "section", ""))
-        if section and section not in sections:
-            sections.append(section)
-        chunk_type = str(getattr(hit, "chunk_type", ""))
-        chunk_types[chunk_type] = chunk_types.get(chunk_type, 0) + 1
-    missing = required - covered
-    return {
-        "agent": "evidence_coverage",
-        "enabled": LINE_MULTI_AGENT_ENABLED,
-        "answerable": bool(hits) and not missing,
-        "required_facets": sorted(required),
-        "covered_facets": sorted(covered),
-        "missing_facets": sorted(missing),
-        "source_labels": sorted(label for label in source_labels if label),
-        "sections": sections[:12],
-        "chunk_types": chunk_types,
-    }
-
-
 def local_evidence_coverage(
     user_text: str,
     hits: list[KnowledgeHit],
     clinical_intent: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    coverage = evidence_coverage_agent(user_text, hits, clinical_intent)
-    required = set(coverage["required_facets"])
+    required = set(required_facets(user_text))
+    required.update(
+        facet
+        for facet in json_list((clinical_intent or {}).get("required_facets"))
+        if facet
+        in {
+            "kidney_context",
+            "medication",
+            "threshold",
+            "glycemic_target",
+            "a1c_reliability",
+            "monitoring",
+            "technology_indication",
+            "diagnosis",
+            "retinopathy_context",
+            "staging",
+            "pad_context",
+            "ascvd_context",
+            "pregnancy",
+            "hypoglycemia",
+            "treatment",
+            "foot_care",
+            "frequency",
+            "liver_context",
+        }
+    )
     if not required:
         return bool(hits), ""
-    missing = set(coverage["missing_facets"])
+
+    covered: set[str] = set()
+    for hit in hits:
+        covered.update(hit_facets(hit))
+
+    missing = required - covered
     if not missing:
         return True, ""
 
     return False, "本地檢索仍缺少必要面向：" + ", ".join(sorted(missing))
-
-
-def retrieval_failure_analyzer_agent(
-    user_text: str,
-    retrieval_query: str,
-    candidates: list[KnowledgeHit],
-    selected_hits: list[KnowledgeHit],
-    clinical_intent: dict[str, Any] | None,
-    coverage: dict[str, Any],
-    rerank_answerable: bool,
-    local_answerable: bool,
-    coverage_gaps: str = "",
-) -> dict[str, Any]:
-    reasons: list[str] = []
-    suggestions: list[str] = []
-    candidate_coverage = evidence_coverage_agent(user_text, candidates, clinical_intent)
-
-    if not candidates:
-        reasons.append("no_candidates")
-        suggestions.append("檢查 guideline 檔案是否載入，或增加 clinical brain search_queries / ontology tags。")
-    if candidates and not selected_hits:
-        reasons.append("no_selected_hits")
-        suggestions.append("檢查 reranker 是否過度保守，或暫時使用本地 ranking fallback。")
-    if coverage.get("missing_facets"):
-        reasons.append("selected_hits_missing_required_facets")
-        suggestions.append("針對 missing facets 啟動 recursive coverage retrieval 或補 target chapter routing。")
-    if candidate_coverage.get("answerable") and not coverage.get("answerable"):
-        reasons.append("reranker_dropped_covered_evidence")
-        suggestions.append("調整 reranker prompt 或優先保留 coverage-complete candidates。")
-    if rerank_answerable is False and local_answerable is True:
-        reasons.append("llm_reranker_or_review_too_conservative")
-        suggestions.append("允許 local coverage override，並把 evidence review 限縮為驗證而非否決。")
-    if "whole-section context 已觸發，但沒有找到" in coverage_gaps:
-        reasons.append("whole_section_context_missing")
-        suggestions.append("檢查 section parser 是否正確保留 parent_text。")
-    if not reasons and coverage.get("answerable"):
-        reasons.append("no_failure_detected")
-        suggestions.append("目前 selected evidence 覆蓋 required facets；若最終仍拒答，檢查 evidence review 或 long-context verification。")
-
-    return {
-        "agent": "retrieval_failure_analyzer",
-        "enabled": LINE_MULTI_AGENT_ENABLED,
-        "reasons": reasons,
-        "suggestions": suggestions,
-        "candidate_coverage": candidate_coverage,
-        "selected_coverage": coverage,
-        "candidate_count": len(candidates),
-        "selected_count": len(selected_hits),
-        "retrieval_query_chars": len(retrieval_query),
-    }
 
 
 def hit_identity(hit: KnowledgeHit) -> tuple[str, str, str, str]:
@@ -1617,18 +1492,11 @@ def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
     selected_hits, recursive_note = append_recursive_coverage_hits(user_text, selected_hits, clinical_intent)
     selected_hits, whole_section_note = append_whole_section_context_hits(user_text, selected_hits, clinical_intent)
     local_answerable, local_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
-    coverage_agent = evidence_coverage_agent(user_text, selected_hits, clinical_intent)
-    failure_agent = retrieval_failure_analyzer_agent(
-        user_text,
-        retrieval_query,
-        candidates,
-        selected_hits,
-        clinical_intent,
-        coverage_agent,
-        answerable,
-        local_answerable,
-        "；".join(part for part in [coverage_gaps, recursive_note, whole_section_note, local_gap] if part),
-    )
+    covered_facets: set[str] = set()
+    for hit in selected_hits:
+        covered_facets.update(hit_facets(hit))
+    required = set(required_facets(user_text))
+    required.update(json_list((clinical_intent or {}).get("required_facets")))
     return {
         "query": user_text,
         "use_llm": use_llm,
@@ -1642,13 +1510,9 @@ def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
             }
             for variant in variants
         ],
-        "required_facets": coverage_agent["required_facets"],
-        "covered_facets": coverage_agent["covered_facets"],
-        "missing_facets": coverage_agent["missing_facets"],
-        "agents": {
-            "evidence_coverage": coverage_agent,
-            "failure_analyzer": failure_agent,
-        },
+        "required_facets": sorted(required),
+        "covered_facets": sorted(covered_facets),
+        "missing_facets": sorted(required - covered_facets),
         "candidate_count": len(candidates),
         "candidates": [
             serialize_debug_hit(hit, index)
@@ -1666,43 +1530,6 @@ def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
         "recursive_note": recursive_note,
         "whole_section_note": whole_section_note,
         "knowledge": knowledge_status(),
-    }
-
-
-def regression_test_agent(use_llm: bool = False) -> dict[str, Any]:
-    results: list[dict[str, Any]] = []
-    passed = 0
-    started = time_now_ms()
-    for item in REGRESSION_QUESTIONS:
-        trace = debug_search_trace(item["question"], use_llm=use_llm)
-        missing = set(trace.get("missing_facets", []))
-        expected = set(item.get("required_facets", []))
-        covered = set(trace.get("covered_facets", []))
-        expected_missing = sorted(expected - covered)
-        ok = not missing and not expected_missing and bool(trace.get("selected_hits"))
-        if ok:
-            passed += 1
-        results.append(
-            {
-                "id": item["id"],
-                "question": item["question"],
-                "passed": ok,
-                "expected_required_facets": sorted(expected),
-                "missing_facets": sorted(missing),
-                "expected_missing_facets": expected_missing,
-                "first_hit": trace["selected_hits"][0] if trace.get("selected_hits") else None,
-                "failure_reasons": trace.get("agents", {}).get("failure_analyzer", {}).get("reasons", []),
-            }
-        )
-    return {
-        "agent": "regression_test",
-        "enabled": LINE_MULTI_AGENT_ENABLED,
-        "use_llm": use_llm,
-        "passed": passed,
-        "total": len(REGRESSION_QUESTIONS),
-        "ok": passed == len(REGRESSION_QUESTIONS),
-        "duration_ms": time_now_ms() - started,
-        "results": results,
     }
 
 
@@ -1837,10 +1664,6 @@ def health() -> dict[str, Any]:
             "guideline_strict_grounding": True,
             "guideline_query_planning": LINE_QUERY_PLANNING_ENABLED,
             "clinical_intent_planning": LINE_QUERY_PLANNING_ENABLED,
-            "conditional_multi_agent_pipeline": LINE_MULTI_AGENT_ENABLED,
-            "evidence_coverage_agent": LINE_MULTI_AGENT_ENABLED,
-            "retrieval_failure_analyzer_agent": LINE_MULTI_AGENT_ENABLED,
-            "regression_test_agent": LINE_MULTI_AGENT_ENABLED,
             "guideline_evidence_review": LINE_EVIDENCE_REVIEW_ENABLED,
             "all_mounted_guideline_sources": True,
             "ada_only_sources": False,
@@ -1875,7 +1698,6 @@ def health() -> dict[str, Any]:
             "inverted_index_retrieval": True,
             "long_context_verification": LINE_LONG_CONTEXT_VERIFICATION_ENABLED,
             "debug_search_endpoint": LINE_DEBUG_SEARCH_ENABLED,
-            "debug_regression_endpoint": LINE_DEBUG_SEARCH_ENABLED,
             "guideline_strict_grounding_current": True,
             "guideline_query_planning_current": LINE_QUERY_PLANNING_ENABLED,
             "guideline_evidence_review_current": LINE_EVIDENCE_REVIEW_ENABLED,
@@ -1899,16 +1721,6 @@ def debug_search(q: str = "", llm: bool = False, x_debug_token: str = Header(def
     if not query:
         raise HTTPException(status_code=400, detail="missing q")
     return debug_search_trace(query, use_llm=llm)
-
-
-@app.get("/debug/regression")
-def debug_regression(llm: bool = False, x_debug_token: str = Header(default="")) -> dict[str, Any]:
-    if not LINE_DEBUG_SEARCH_ENABLED:
-        raise HTTPException(status_code=404, detail="debug regression disabled")
-    expected_token = os.getenv("LINE_DEBUG_TOKEN", "").strip()
-    if expected_token and not hmac.compare_digest(x_debug_token, expected_token):
-        raise HTTPException(status_code=403, detail="invalid debug token")
-    return regression_test_agent(use_llm=llm)
 
 
 @app.post("/line/webhook")
