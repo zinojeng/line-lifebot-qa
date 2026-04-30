@@ -49,19 +49,20 @@
     },
     {
       "id": "ada_s006_glycemic_goals_crises",
-      "triggers": ["S6", "section 6", "dc26s006", "血糖目標", "A1C 目標", "低血糖", "高血糖急症", "DKA", "HHS", "time in range", "hypoglycemia"],
-      "expansions": ["dc26s006", "section 6", "Glycemic Goals, Hypoglycemia, and Hyperglycemic Crises", "glycemic goals", "A1C goal", "individualized targets", "CGM metrics", "time in range", "TIR", "hypoglycemia", "severe hypoglycemia", "glucagon", "hyperglycemic crises", "DKA", "HHS", "ketones"],
+      "triggers": ["S6", "section 6", "dc26s006", "血糖目標", "A1C 目標", "CGM 判讀", "CGM 指標", "低血糖", "高血糖急症", "DKA", "HHS", "time in range", "hypoglycemia", "GMI", "AGP"],
+      "expansions": ["dc26s006", "section 6", "Glycemic Goals, Hypoglycemia, and Hyperglycemic Crises", "glycemic goals", "A1C goal", "individualized targets", "CGM metrics", "time in range", "TIR", "time below range", "TBR", "time above range", "TAR", "GMI", "glucose management indicator", "coefficient of variation", "glycemic variability", "ambulatory glucose profile", "AGP", "hypoglycemia", "severe hypoglycemia", "glucagon", "hyperglycemic crises", "DKA", "HHS", "ketones"],
       "variant_queries": [
-        "ADA section 6 dc26s006 glycemic goals A1C individualized targets CGM metrics time in range",
+        "ADA section 6 dc26s006 glycemic goals A1C individualized targets CGM metrics time in range TIR time below range TBR time above range TAR GMI coefficient of variation AGP",
         "hypoglycemia severe hypoglycemia glucagon DKA HHS hyperglycemic crises ketones"
       ]
     },
     {
       "id": "ada_s007_diabetes_technology",
-      "triggers": ["S7", "section 7", "dc26s007", "糖尿病科技", "糖尿病新科技", "新科技", "連續血糖", "連續血糖監測", "血糖機", "胰島素幫浦", "閉環", "AID", "CGM", "BGM", "pump", "適用哪些病人", "使用對象"],
-      "expansions": ["dc26s007", "section 7", "Diabetes Technology", "CGM", "continuous glucose monitoring", "continuous glucose monitor", "rtCGM", "isCGM", "BGM", "blood glucose monitoring", "insulin pump", "CSII", "automated insulin delivery", "AID", "hybrid closed loop", "smart insulin pen", "connected insulin pen", "digital health", "use of CGM is recommended", "diabetes onset", "children adolescents adults", "on insulin therapy", "noninsulin therapies that can cause hypoglycemia", "any diabetes treatment where CGM helps management", "periodic use of personal or professional CGM"],
+      "triggers": ["S7", "section 7", "dc26s007", "糖尿病科技", "糖尿病新科技", "新科技", "連續血糖", "連續血糖監測", "CGM 判讀", "CGM 指標", "CGM 報告", "血糖機", "胰島素幫浦", "閉環", "AID", "CGM", "BGM", "pump", "適用哪些病人", "使用對象"],
+      "expansions": ["dc26s007", "section 7", "Diabetes Technology", "CGM", "continuous glucose monitoring", "continuous glucose monitor", "rtCGM", "isCGM", "CGM metrics", "time in range", "TIR", "time below range", "TBR", "time above range", "TAR", "GMI", "glucose management indicator", "ambulatory glucose profile", "AGP", "BGM", "blood glucose monitoring", "insulin pump", "CSII", "automated insulin delivery", "AID", "hybrid closed loop", "smart insulin pen", "connected insulin pen", "digital health", "use of CGM is recommended", "diabetes onset", "children adolescents adults", "on insulin therapy", "noninsulin therapies that can cause hypoglycemia", "any diabetes treatment where CGM helps management", "periodic use of personal or professional CGM"],
       "variant_queries": [
         "ADA section 7 dc26s007 diabetes technology CGM BGM insulin pump CSII automated insulin delivery AID",
+        "ADA section 7 CGM report interpretation CGM metrics time in range TIR TBR TAR GMI ambulatory glucose profile AGP",
         "hybrid closed loop smart insulin pen connected insulin pen digital health glucose monitoring",
         "ADA recommendation 7.15 use of CGM is recommended at diabetes onset children adolescents adults on insulin therapy noninsulin therapies that can cause hypoglycemia any diabetes treatment where CGM helps management",
         "ADA section 7 CGM indicated people with diabetes individual circumstances preferences needs pregnancy periodic professional CGM"

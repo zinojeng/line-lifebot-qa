@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-01-light-agents-v25
+APP_VERSION=2026-05-01-advisory-agents-v26
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -74,7 +74,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-01-light-agents-v25
+APP_VERSION=2026-05-01-advisory-agents-v26
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -267,16 +267,16 @@ Per message, the flow is:
 10. Apply a local coverage safety net so a conservative LLM reranker cannot
    reject an answer when selected snippets already cover required facets such
    as CKD, medication, and eGFR thresholds.
-11. Ask the configured LLM to organize only the selected guideline snippets into an evidence
-   review, including source names, coverage gaps, and the clinical intent answer strategy.
+11. Run evidence review only when adaptive safety needs it, such as high-risk
+   questions, actionable coverage gaps, or missing facets.
 12. For broad questions, add whole-section context from the selected guideline
     sections, so questions such as "which patients should use CGM?" can include
     the full ADA S7 CGM subsection rather than only isolated table rows.
-13. Run long-context verification over the selected snippets plus parent section
-    context. If the verifier still finds missing evidence, the app refuses to
-    answer rather than filling gaps from model memory.
+13. Run long-context verification only for high-risk, missing-facet, or failed
+    evidence-review cases. For ordinary extended guideline questions, agents are
+    advisory and should not block answers when same-topic snippets were found.
 14. Generate the final Traditional Chinese LINE answer from the guideline
-    snippets, evidence review, and long-context verification.
+    snippets and any adaptive safety notes.
 
 The final answer prompt still forbids the configured model from using built-in medical
 knowledge, unmounted guidelines, news, or unsupported inference.
@@ -487,7 +487,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-01-light-agents-v25",
+  "app_version": "2026-05-01-advisory-agents-v26",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {

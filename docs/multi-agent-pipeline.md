@@ -128,6 +128,9 @@ coverage 不足 / high-risk / debug：
 
 `Evidence Coverage Agent` 是本地 facet 檢查，成本很低，可以常駐。
 `Failure Analyzer Agent` 和 `Regression Test Agent` 應主要放在 debug / 部署檢查。
+對於一般延伸型問題，例如 CGM 判讀指標、視網膜病變分期、PAD 藥物治療，agent 的角色是 advisory：
+只提醒缺口，不應在已命中同主題指南片段時直接拒答。
+只有高風險、急症、禁忌、eGFR 門檻、懷孕、住院/手術或完全找不到候選片段時，才讓 safety agent 阻擋回答。
 
 Adaptive safety 預設：
 
