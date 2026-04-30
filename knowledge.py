@@ -42,10 +42,6 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "目標": ("goal", "target", "glycemic goals", "A1C goal", "glucose target", "time in range"),
     "血糖控制": ("glycemic goals", "glycemic management", "A1C", "CGM", "BGM", "time in range"),
     "血糖控制目標": ("glycemic goals", "A1C goal", "glucose target", "CGM metrics", "time in range"),
-    "判讀": ("interpretation", "CGM metrics", "ambulatory glucose profile", "AGP", "time in range", "TIR", "GMI"),
-    "指標": ("metrics", "CGM metrics", "time in range", "TIR", "time below range", "TBR", "time above range", "TAR", "GMI"),
-    "報告": ("report", "ambulatory glucose profile", "AGP", "CGM metrics", "time in range", "GMI"),
-    "圖表": ("ambulatory glucose profile", "AGP", "CGM report", "CGM metrics", "time in range"),
     "酮酸": ("ketoacidosis", "DKA", "ketone"),
     "飯": ("meal", "nutrition", "postprandial", "carbohydrate"),
     "飲食": ("nutrition", "diet", "medical nutrition therapy", "carbohydrate", "meal"),
@@ -127,8 +123,8 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "體重": ("weight", "obesity", "lifestyle", "weight management"),
     "肥胖": ("obesity", "adiposity", "weight management", "anti-obesity medication", "metabolic surgery"),
     "血糖機": ("blood glucose monitoring", "BGM", "glucose meter"),
-    "連續血糖": ("continuous glucose monitoring", "continuous glucose monitor", "CGM", "rtCGM", "isCGM", "CGM metrics", "time in range"),
-    "連續血糖監測": ("continuous glucose monitoring", "continuous glucose monitor", "CGM", "rtCGM", "isCGM", "CGM metrics", "time in range"),
+    "連續血糖": ("continuous glucose monitoring", "continuous glucose monitor", "CGM", "rtCGM", "isCGM"),
+    "連續血糖監測": ("continuous glucose monitoring", "continuous glucose monitor", "CGM", "rtCGM", "isCGM"),
     "新科技": ("diabetes technology", "CGM", "continuous glucose monitoring", "automated insulin delivery", "AID"),
     "科技": ("diabetes technology", "CGM", "continuous glucose monitoring", "BGM", "insulin pump", "AID"),
     "適用": ("recommended", "offered", "indicated", "use of CGM", "on insulin therapy", "individual needs"),
@@ -1571,7 +1567,6 @@ def structured_metadata(
         "retinopathy_treatment": r"\b(anti-vegf|vascular endothelial growth factor|panretinal laser photocoagulation|photocoagulation|vitrectomy|corticosteroid|focal/grid|macular edema treatment|emerging therapies)\b|雷射|注射|治療",
         "neuropathy": r"\bneuropathy|monofilament|foot ulcer|foot care\b|神經|足|腳",
         "technology": r"\bcgm|bgm|smbg|time in range|automated insulin delivery\b|連續血糖|血糖機",
-        "cgm_metrics": r"\b(cgm metrics|time in range|tir|time below range|tbr|time above range|tar|gmi|glucose management indicator|coefficient of variation|glycemic variability|ambulatory glucose profile|agp)\b|判讀|指標|圖表|報告",
         "technology_indication": r"\b(use of cgm is recommended|recommended at diabetes onset|people with diabetes.*cgm|cgm.*recommended|offered to people with diabetes|on insulin therapy|noninsulin therapies that can cause hypoglycemia|periodic use of personal or professional cgm|individual circumstances preferences needs)\b|適用|適合|哪些病人",
         "diagnosis": r"\bdiagnosis|diagnostic|screening|ogtt|classification|prediabetes\b|診斷|篩檢",
     }
@@ -1659,29 +1654,6 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
     glycemic_goal_query = any(term in query for term in ("血糖控制", "控制目標", "血糖目標", "目標")) or any(
         term in query_lower for term in ("glycemic goal", "glycemic target", "glucose target", "a1c goal")
     )
-    cgm_metrics_query = (
-        any(term in query for term in ("判讀", "指標", "報告", "圖表"))
-        or any(
-            term in query_lower
-            for term in (
-                "metric",
-                "interpret",
-                "interpretation",
-                "time in range",
-                "tir",
-                "time below range",
-                "tbr",
-                "time above range",
-                "tar",
-                "gmi",
-                "glucose management indicator",
-                "coefficient of variation",
-                "glycemic variability",
-                "ambulatory glucose profile",
-                "agp",
-            )
-        )
-    ) and any(term in query_lower for term in ("cgm", "continuous glucose", "glucose monitoring", "連續血糖"))
     if dialysis_query and glycemic_goal_query:
         variants.extend(
             [
@@ -1694,21 +1666,6 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
                     "measurement_method",
                     f"{query} A1C reliability advanced CKD dialysis glycated albumin fructosamine CGM BGM glucose monitoring",
                     0.9,
-                ),
-            ]
-        )
-    if cgm_metrics_query:
-        variants.extend(
-            [
-                QueryVariant(
-                    "cgm_metrics_s6",
-                    f"{query} ADA section 6 dc26s006 CGM metrics time in range TIR time below range TBR time above range TAR glucose management indicator GMI glycemic variability coefficient of variation",
-                    0.95,
-                ),
-                QueryVariant(
-                    "cgm_metrics_s7",
-                    f"{query} ADA section 7 dc26s007 continuous glucose monitoring CGM report ambulatory glucose profile AGP glucose monitoring interpretation hypoglycemia time below range",
-                    0.92,
                 ),
             ]
         )
@@ -1776,20 +1733,6 @@ def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
                 ),
             ]
         )
-    if "technology" in concepts:
-        base = (
-            f"{query} ADA section 7 dc26s007 diabetes technology continuous glucose monitoring CGM BGM "
-            "rtCGM isCGM time in range hypoglycemia glucose monitoring"
-        )
-        if any(term in query for term in ("判讀", "指標", "報告", "圖表")) or any(
-            term in query_lower
-            for term in ("metric", "interpret", "time in range", "tir", "tbr", "tar", "gmi", "ambulatory glucose profile", "agp")
-        ):
-            base += (
-                " ADA section 6 dc26s006 CGM metrics time in range TIR time below range TBR "
-                "time above range TAR glucose management indicator GMI coefficient of variation glycemic variability AGP"
-            )
-        variants.append(QueryVariant("concept_technology", base, 0.94))
     return variants
 
 
@@ -1833,16 +1776,11 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
     "technology": {
         "concepts": ["continuous glucose monitoring", "diabetes technology"],
         "target_chapters": ["ADA S7 Diabetes Technology", "ADA S6 Glycemic Goals and Hypoglycemia"],
-        "evidence_targets": [
-            "CGM indications when the question asks who should use CGM",
-            "CGM metrics: time in range, time below range, time above range, GMI, glucose variability, AGP",
-            "hypoglycemia risk and time below range",
-        ],
-        "avoid_routes": ["do not force CGM metrics questions to prove CGM indications"],
-        "required_facets": ["monitoring"],
+        "evidence_targets": ["CGM indications", "insulin therapy", "hypoglycemia risk", "time in range"],
+        "avoid_routes": ["do not answer CGM indications only from generic monitoring text"],
+        "required_facets": ["technology_indication", "monitoring"],
         "search_queries": [
-            "ADA section 7 continuous glucose monitoring CGM recommended diabetes onset insulin therapy noninsulin therapies hypoglycemia time in range",
-            "ADA section 6 CGM metrics time in range TIR time below range TBR time above range TAR GMI glucose management indicator ambulatory glucose profile AGP",
+            "ADA section 7 continuous glucose monitoring CGM recommended diabetes onset insulin therapy noninsulin therapies hypoglycemia time in range"
         ],
     },
     "ckd": {
@@ -2152,30 +2090,6 @@ def required_facets(query: str) -> set[str]:
     ):
         facets.add("monitoring")
     if (
-        any(term in query for term in ("判讀", "指標", "報告", "圖表"))
-        or any(
-            term in lower
-            for term in (
-                "cgm metrics",
-                "metric",
-                "interpret",
-                "time in range",
-                "tir",
-                "time below range",
-                "tbr",
-                "time above range",
-                "tar",
-                "gmi",
-                "glucose management indicator",
-                "coefficient of variation",
-                "glycemic variability",
-                "ambulatory glucose profile",
-                "agp",
-            )
-        )
-    ) and any(term in lower for term in ("cgm", "continuous glucose", "glucose monitoring", "連續血糖")):
-        facets.update({"monitoring", "cgm_metrics"})
-    if (
         any(term in query for term in ("連續血糖", "連續血糖監測", "新科技", "科技", "血糖機"))
         or any(term in lower for term in ("cgm", "continuous glucose", "diabetes technology"))
     ) and (
@@ -2236,11 +2150,6 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
         facets.add("a1c_reliability")
     if re.search(r"\b(cgm|bgm|smbg|glucose monitoring|time in range|tir|time below range|time above range)\b", haystack):
         facets.add("monitoring")
-    if re.search(
-        r"\b(cgm metrics|time in range|tir|time below range|tbr|time above range|tar|gmi|glucose management indicator|coefficient of variation|glycemic variability|ambulatory glucose profile|agp)\b",
-        haystack,
-    ):
-        facets.add("cgm_metrics")
     if re.search(
         r"\b(use of cgm is recommended|recommended at diabetes onset|offered to people with diabetes|on insulin therapy|noninsulin therapies that can cause hypoglycemia|any diabetes treatment where cgm helps|periodic use of personal or professional cgm|individual circumstances preferences needs)\b",
         haystack,
@@ -2424,28 +2333,6 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         any(term in query for term in ("適用", "適合", "哪些病人", "哪種病人", "誰可以", "使用對象"))
         or any(term in query_lower for term in ("indication", "recommended", "offered", "eligible", "who should"))
     )
-    cgm_metrics_query = (
-        any(term in query for term in ("判讀", "指標", "報告", "圖表"))
-        or any(
-            term in query_lower
-            for term in (
-                "metric",
-                "interpret",
-                "time in range",
-                "tir",
-                "time below range",
-                "tbr",
-                "time above range",
-                "tar",
-                "gmi",
-                "glucose management indicator",
-                "coefficient of variation",
-                "glycemic variability",
-                "ambulatory glucose profile",
-                "agp",
-            )
-        )
-    ) and any(term in query_lower for term in ("cgm", "continuous glucose", "glucose monitoring", "連續血糖"))
     vaccination_query = any(term in query for term in ("疫苗", "流感", "肺炎鏈球菌", "新冠", "帶狀皰疹")) or any(
         term in query_lower for term in ("vaccine", "vaccination", "immunization", "influenza", "pneumococcal", "covid", "hepatitis")
     )
@@ -2492,15 +2379,6 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 2.6
     if technology_indication_query and re.search(r"\b(cgm metrics|table 6\.2|time in range|tar|tbr|tir)\b", haystack):
         adjustment *= 0.55
-    if cgm_metrics_query and ("dc26s006" in haystack or "glycemic goals" in haystack):
-        adjustment *= 3.2
-    if cgm_metrics_query and ("dc26s007" in haystack or "diabetes technology" in haystack):
-        adjustment *= 2.0
-    if cgm_metrics_query and re.search(
-        r"\b(cgm metrics|time in range|tir|time below range|tbr|time above range|tar|gmi|glucose management indicator|coefficient of variation|glycemic variability|ambulatory glucose profile|agp)\b",
-        haystack,
-    ):
-        adjustment *= 3.4
     if pad_query and ("dc26s010" in haystack or "cardiovascular disease and risk management" in haystack):
         adjustment *= 5.0
     if pad_query and ("dc26s012" in haystack or "foot care" in haystack):

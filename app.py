@@ -79,7 +79,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-advisory-agents-v26")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-light-agents-v25")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -908,8 +908,7 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "不要提供醫療建議，不要回答問題，不要使用模型內建醫學知識下結論。"
         "請輸出 JSON，欄位固定為："
         "clinical_intent, question_type, patient_context, concepts, target_chapters, evidence_targets, must_retrieve, required_facets, avoid_routes, answer_strategy, do_not_answer_with。"
-        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, cgm_metrics, technology_indication, diagnosis, retinopathy_context, staging, pad_context, ascvd_context, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context。"
-        "若問題是 CGM 判讀、CGM 報告、重要指標、AGP、TIR/TBR/TAR、GMI 或 glucose variability，請理解為 CGM metrics；target_chapters 應包含 ADA S6 與 S7，required_facets 用 monitoring 和 cgm_metrics，不要要求 technology_indication，除非使用者問「哪些病人適用」。"
+        "required_facets 只能使用這些值：kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, technology_indication, diagnosis, retinopathy_context, staging, pad_context, ascvd_context, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context。"
         "若使用者用白話描述下肢動脈阻塞、腳血管塞住、跛行、下肢缺血，請理解為 PAD / lower-extremity arterial disease / ASCVD；target_chapters 應包含 ADA S10 與 ADA S12，evidence_targets 應包含 antiplatelet、aspirin/clopidogrel、rivaroxaban plus aspirin、statin/lipid、blood pressure、smoking cessation、vascular assessment/revascularization、GLP-1 RA/semaglutide limb outcome evidence；avoid_routes 要說不要只用一般降血糖藥物表回答。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
         "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
@@ -969,7 +968,6 @@ def build_retrieval_query(
         "若 question_type 是 medication_threshold_comparison，請加入 CKD glucose-lowering therapy、SGLT2 inhibitor eGFR threshold、metformin eGFR、GLP-1 RA CKD、finerenone nonsteroidal MRA eGFR、hypoglycemia risk advanced CKD、insulin kidney impairment。"
         "若問題提到脂肪肝、脂肪性肝炎、MASLD、MASH、NAFLD、NASH、肝硬化或肝纖維化，請加入 MASLD、MASH、NAFLD、NASH、steatotic liver disease、steatohepatitis、fibrosis、cirrhosis、GLP-1 receptor agonist、pioglitazone、tirzepatide、weight loss。"
         "若 concepts 或問題指向 PAD、peripheral artery disease、下肢動脈阻塞、下肢缺血或跛行，請加入 ADA section 10、ADA section 12、PAD、lower-extremity arterial disease、ASCVD、antiplatelet、aspirin、clopidogrel、rivaroxaban、statin、lipid-lowering、blood pressure、smoking cessation、ABI、toe pressure、revascularization、semaglutide、STRIDE、limb outcomes；並避免只搜尋 glucose-lowering medication table。"
-        "若問題提到 CGM 判讀、CGM 指標、報告、圖表、AGP、TIR/TBR/TAR、GMI、glucose variability，請加入 ADA section 6、ADA section 7、CGM metrics、time in range、time below range、time above range、GMI、glucose management indicator、coefficient of variation、ambulatory glucose profile、AGP。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"
     )
@@ -1007,7 +1005,6 @@ ALLOWED_REQUIRED_FACETS = {
     "glycemic_target",
     "a1c_reliability",
     "monitoring",
-    "cgm_metrics",
     "technology_indication",
     "diagnosis",
     "retinopathy_context",
@@ -1033,11 +1030,6 @@ REGRESSION_QUESTIONS = [
         "id": "retinopathy_staging_treatment",
         "question": "糖尿病的視網膜病變，它的分期有哪些？要怎麼去有新的治療？",
         "required_facets": ["retinopathy_context", "staging", "treatment"],
-    },
-    {
-        "id": "cgm_metrics",
-        "question": "有關 CGM 判讀的，有哪些指標很重要嗎？",
-        "required_facets": ["monitoring", "cgm_metrics"],
     },
     {
         "id": "cgm_indication",
@@ -1166,13 +1158,10 @@ def retrieval_failure_analyzer_agent(
 
 
 def high_risk_or_complex_question(user_text: str, clinical_intent: dict[str, Any] | None = None) -> bool:
-    user_lower = user_text.lower()
     lower = f"{user_text} {clinical_intent_text(clinical_intent)}".lower()
     if comparative_threshold_question(user_text):
         return True
     if any(term in user_text for term in ("懷孕", "妊娠", "洗腎", "透析", "腎衰竭", "手術", "住院", "低血糖", "酮酸", "急性")):
-        return True
-    if any(term in user_lower for term in ("hypoglycemia", "dka", "hhs", "ketoacidosis", "acute illness")):
         return True
     return any(
         term in lower
@@ -1183,40 +1172,14 @@ def high_risk_or_complex_question(user_text: str, clinical_intent: dict[str, Any
             "esrd",
             "perioperative",
             "hospital",
+            "hypoglycemia",
+            "dka",
+            "hhs",
             "contraindication",
             "eGFR".lower(),
             "threshold",
         )
     )
-
-
-def actionable_coverage_gaps(coverage_gaps: str) -> bool:
-    if not coverage_gaps.strip():
-        return False
-    ignored_markers = (
-        "LLM reranker disabled",
-        "recursive coverage retrieval 補入",
-        "whole-section context 補入",
-    )
-    parts = [part.strip() for part in re.split(r"[；\n]+", coverage_gaps) if part.strip()]
-    return any(not any(marker in part for marker in ignored_markers) for part in parts)
-
-
-def advisory_override_allowed(
-    user_text: str,
-    selected_hits: list[KnowledgeHit],
-    clinical_intent: dict[str, Any] | None,
-    coverage_agent: dict[str, Any],
-) -> bool:
-    if not selected_hits or high_risk_or_complex_question(user_text, clinical_intent):
-        return False
-    required = set(coverage_agent.get("required_facets") or [])
-    covered = set(coverage_agent.get("covered_facets") or [])
-    if not required:
-        return True
-    if not required - covered:
-        return True
-    return bool(required & covered)
 
 
 def should_run_evidence_review(
@@ -1235,7 +1198,7 @@ def should_run_evidence_review(
     if not LINE_ADAPTIVE_SAFETY_ENABLED:
         return True
     return bool(
-        actionable_coverage_gaps(coverage_gaps)
+        coverage_gaps
         or coverage_agent.get("missing_facets")
         or high_risk_or_complex_question(user_text, clinical_intent)
         or len(selected_hits) < 2
@@ -1259,10 +1222,11 @@ def should_run_long_context_verification(
     if not LINE_ADAPTIVE_SAFETY_ENABLED:
         return True
     return bool(
-        actionable_coverage_gaps(coverage_gaps)
+        coverage_gaps
         or coverage_agent.get("missing_facets")
         or evidence_review_says_unanswerable(evidence_review)
         or high_risk_or_complex_question(user_text, clinical_intent)
+        or any(str(getattr(hit, "chunk_type", "")) == "whole_section" for hit in selected_hits)
     )
 
 
@@ -1310,7 +1274,6 @@ def recursive_coverage_queries(
         "glycemic_target": f"{user_text} glycemic goals A1C goal individualized target hypoglycemia risk",
         "a1c_reliability": f"{user_text} A1C less reliable advanced CKD dialysis glycated albumin fructosamine CGM BGM",
         "monitoring": f"{user_text} monitoring CGM BGM SMBG time in range follow-up",
-        "cgm_metrics": f"{user_text} ADA section 6 section 7 CGM metrics time in range TIR time below range TBR time above range TAR GMI glucose management indicator coefficient of variation ambulatory glucose profile AGP",
         "technology_indication": f"{user_text} ADA section 7 diabetes technology use of CGM recommended diabetes onset children adolescents adults insulin therapy noninsulin therapies hypoglycemia any diabetes treatment where CGM helps management",
         "diagnosis": f"{user_text} diagnosis screening diagnostic criteria A1C fasting plasma glucose OGTT",
         "retinopathy_context": f"{user_text} ADA section 12 diabetic retinopathy retinal disease ophthalmologist macular edema DME NPDR PDR",
@@ -1397,7 +1360,7 @@ def broad_section_context_needed(
     lower = f"{user_text} {clinical_intent_text(clinical_intent)}".lower()
     facets = set(required_facets(user_text))
     facets.update(json_list((clinical_intent or {}).get("required_facets")))
-    if "technology_indication" in facets or "cgm_metrics" in facets:
+    if "technology_indication" in facets:
         return True
     broad_terms = ("哪些", "哪種", "誰可以", "適用", "適合", "使用對象", "建議", "怎麼選", "治療建議")
     if any(term in user_text for term in broad_terms):
@@ -1854,38 +1817,23 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             rerank_answerable = True
         elif whole_gap:
             coverage_gaps = (coverage_gaps + "；" if coverage_gaps else "") + whole_gap
-    coverage_agent = evidence_coverage_agent(user_text, selected_hits, clinical_intent)
-    if not selected_hits:
+    if not selected_hits or not rerank_answerable:
         return knowledge_no_answer_text()
-    if not rerank_answerable:
-        if advisory_override_allowed(user_text, selected_hits, clinical_intent, coverage_agent):
-            coverage_gaps = (
-                coverage_gaps + "；" if coverage_gaps else ""
-            ) + "一般延伸型問題採 advisory override：保留已命中的指南片段回答，agents 只提示缺口不直接否決。"
-            rerank_answerable = True
-        else:
-            return knowledge_no_answer_text()
 
     knowledge_text = knowledge_prompt_from_hits(selected_hits)
+    coverage_agent = evidence_coverage_agent(user_text, selected_hits, clinical_intent)
     evidence_review = ""
     if should_run_evidence_review(user_text, selected_hits, clinical_intent, coverage_gaps, coverage_agent):
         evidence_review = build_evidence_review(api_key, user_text, knowledge_text, clinical_intent)
     if evidence_review_says_unanswerable(evidence_review):
         locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
-        if advisory_override_allowed(user_text, selected_hits, clinical_intent, coverage_agent):
-            evidence_review = (
-                evidence_review
-                + "\n\nAdvisory override：此題不是高風險門檻/急症/禁忌問題，且已命中同主題指南片段；"
-                "evidence review 的否決只作為缺口提醒，不阻擋一般指南整理。"
-            )
-        elif not (comparative_threshold_question(user_text) and locally_answerable):
+        if not (comparative_threshold_question(user_text) and locally_answerable):
             return knowledge_no_answer_text()
-        else:
-            evidence_review = (
-                evidence_review
-                + "\n\n本地 coverage override：此題可用指南片段中的 eGFR 門檻做比較式回答；"
-                "不要補充片段外資訊，也不要給個人化劑量。"
-            )
+        evidence_review = (
+            evidence_review
+            + "\n\n本地 coverage override：此題可用指南片段中的 eGFR 門檻做比較式回答；"
+            "不要補充片段外資訊，也不要給個人化劑量。"
+        )
     long_context_verification = ""
     if should_run_long_context_verification(
         user_text,
@@ -1904,13 +1852,7 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         )
     if long_context_says_unverified(long_context_verification):
         locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
-        if advisory_override_allowed(user_text, selected_hits, clinical_intent, coverage_agent):
-            long_context_verification = (
-                long_context_verification
-                + "\n\nAdvisory override：此題不是高風險門檻/急症/禁忌問題，且已命中同主題指南片段；"
-                "長上下文驗證的否決只作為限制提醒，不阻擋一般指南整理。"
-            )
-        elif not (comparative_threshold_question(user_text) and locally_answerable):
+        if not (comparative_threshold_question(user_text) and locally_answerable):
             return knowledge_no_answer_text()
     system_text = (
         SYSTEM_PROMPT
