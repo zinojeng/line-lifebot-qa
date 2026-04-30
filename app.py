@@ -78,7 +78,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-clinical-brain-v22")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-fast-index-v23")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -1695,6 +1695,7 @@ def health() -> dict[str, Any]:
             "recursive_coverage_retrieval": LINE_RECURSIVE_COVERAGE_ENABLED,
             "whole_section_context": LINE_WHOLE_SECTION_CONTEXT_ENABLED,
             "local_hashed_vector_index": True,
+            "inverted_index_retrieval": True,
             "long_context_verification": LINE_LONG_CONTEXT_VERIFICATION_ENABLED,
             "debug_search_endpoint": LINE_DEBUG_SEARCH_ENABLED,
             "guideline_strict_grounding_current": True,

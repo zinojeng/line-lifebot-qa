@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-01-clinical-brain-v22
+APP_VERSION=2026-05-01-fast-index-v23
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -53,6 +53,9 @@ LINE_KNOWLEDGE_PARENT_CONTEXT_CHARS=900
 LINE_KNOWLEDGE_PARENT_SECTION_CHARS=1800
 LINE_KNOWLEDGE_VECTOR_DIM=768
 LINE_KNOWLEDGE_VECTOR_WEIGHT=0.55
+LINE_KNOWLEDGE_INVERTED_INDEX_ENABLED=1
+LINE_KNOWLEDGE_POSTING_MAX_TOKENS=72
+LINE_KNOWLEDGE_POSTING_TARGET_CHUNKS=800
 LINE_DENSE_EMBEDDING_ENABLED=0
 LINE_DENSE_EMBEDDING_PROVIDER=gemini
 LINE_DENSE_EMBEDDING_MODEL=text-embedding-004
@@ -67,7 +70,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-01-clinical-brain-v22
+APP_VERSION=2026-05-01-fast-index-v23
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -305,7 +308,8 @@ LINE_KEYWORD_PATHS=/app/data/keywords
 
 The health check reports `knowledge.keyword_files`, `knowledge.keyword_entries`,
 `knowledge.metadata_tagged_chunks`, `knowledge.ontology_tagged_chunks`,
-`knowledge.vector_index_chunks`, and `knowledge.dense_vector_index_chunks` so
+`knowledge.inverted_index_terms`, `knowledge.vector_index_chunks`, and
+`knowledge.dense_vector_index_chunks` so
 deployment can verify the modules and hybrid retrieval index are loaded.
 
 ## Debug Search
@@ -458,7 +462,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-01-clinical-brain-v22",
+  "app_version": "2026-05-01-fast-index-v23",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -499,6 +503,7 @@ The health check should include:
     "recursive_coverage_retrieval": true,
     "whole_section_context": true,
     "local_hashed_vector_index": true,
+    "inverted_index_retrieval": true,
     "long_context_verification": true,
     "debug_search_endpoint": true,
     "guideline_strict_grounding_current": true,

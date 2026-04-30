@@ -332,6 +332,7 @@ class KnowledgeBase:
         self.chunks: list[KnowledgeChunk] = []
         self.source_files: list[Path] = []
         self.vector_index: list[dict[int, float]] = []
+        self.token_postings: dict[str, tuple[int, ...]] = {}
         self.dense_vector_index: list[list[float]] = []
         self.dense_embedding_error = ""
         self.document_frequency: dict[str, int] = {}
@@ -349,13 +350,16 @@ class KnowledgeBase:
         self.dense_vector_index, self.dense_embedding_error = build_dense_vector_index(chunks)
 
         df: dict[str, int] = {}
+        postings: dict[str, list[int]] = {}
         lengths = []
-        for chunk in chunks:
+        for index, chunk in enumerate(chunks):
             unique = set(chunk.tokens)
             lengths.append(len(chunk.tokens))
             for token in unique:
                 df[token] = df.get(token, 0) + 1
+                postings.setdefault(token, []).append(index)
         self.document_frequency = df
+        self.token_postings = {token: tuple(indexes) for token, indexes in postings.items()}
         self.average_length = sum(lengths) / len(lengths) if lengths else 1.0
 
     def _chunks_from_file(self, path: Path) -> list[KnowledgeChunk]:
@@ -443,7 +447,9 @@ class KnowledgeBase:
         dense_query_vector = dense_embed_query(query) if self.dense_vector_index else []
         dense_vector_weight = float(os.getenv("LINE_DENSE_EMBEDDING_WEIGHT", "1.15"))
         scored: list[tuple[float, KnowledgeChunk]] = []
-        for index, chunk in enumerate(self.chunks):
+        candidate_indexes = self.search_candidate_indexes(query_tokens, use_dense=bool(dense_query_vector))
+        for index in candidate_indexes:
+            chunk = self.chunks[index]
             score = self._score(query_tokens, chunk)
             if query_vector and index < len(self.vector_index):
                 score += sparse_cosine(query_vector, self.vector_index[index]) * vector_weight
@@ -477,6 +483,32 @@ class KnowledgeBase:
             if len(raw_hits) >= max(limit * 4, limit + 20):
                 break
         return source_balanced_hits(raw_hits, limit)
+
+    def search_candidate_indexes(self, query_tokens: list[str], use_dense: bool = False) -> Iterable[int]:
+        if use_dense or not inverted_index_enabled() or not self.token_postings:
+            return range(len(self.chunks))
+
+        unique_tokens = sorted(
+            set(query_tokens),
+            key=lambda token: (self.document_frequency.get(token, len(self.chunks) + 1), -len(token), token),
+        )
+        max_tokens = max(1, int(os.getenv("LINE_KNOWLEDGE_POSTING_MAX_TOKENS", "72")))
+        target_chunks = max(50, int(os.getenv("LINE_KNOWLEDGE_POSTING_TARGET_CHUNKS", "1200")))
+        candidate_indexes: set[int] = set()
+        used = 0
+        for token in unique_tokens:
+            postings = self.token_postings.get(token)
+            if not postings:
+                continue
+            if len(postings) >= max(len(self.chunks) * 0.85, 1):
+                continue
+            candidate_indexes.update(postings)
+            used += 1
+            if used >= max_tokens or len(candidate_indexes) >= target_chunks:
+                break
+        if not candidate_indexes:
+            return range(len(self.chunks))
+        return sorted(candidate_indexes)
 
     def search_multi(self, query: str, limit: int = 3, excerpt_chars: int = 520) -> list[KnowledgeHit]:
         variants = query_variant_specs(query)
@@ -1134,6 +1166,8 @@ def knowledge_status() -> dict[str, object]:
         "chunks": len(kb.chunks) if kb else 0,
         "chunk_type_counts": chunk_type_counts,
         "metadata_tagged_chunks": sum(1 for chunk in kb.chunks if chunk.metadata) if kb else 0,
+        "inverted_index_enabled": inverted_index_enabled(),
+        "inverted_index_terms": len(kb.token_postings) if kb else 0,
         "vector_index_chunks": len(kb.vector_index) if kb else 0,
         "dense_embedding_enabled": dense_embedding_enabled(),
         "dense_embedding_provider": dense_embedding_provider(),
@@ -1194,6 +1228,10 @@ def env_enabled(name: str, default: str = "0") -> bool:
 
 def dense_embedding_enabled() -> bool:
     return env_enabled("LINE_DENSE_EMBEDDING_ENABLED", "0")
+
+
+def inverted_index_enabled() -> bool:
+    return env_enabled("LINE_KNOWLEDGE_INVERTED_INDEX_ENABLED", "1")
 
 
 def dense_embedding_provider() -> str:
