@@ -23,6 +23,11 @@ DEFAULT_KEYWORD_DIR = Path(__file__).resolve().parent / "keywords"
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+-]*|\d+(?:\.\d+)?|[\u4e00-\u9fff]{1,4}")
 HEADING_RE = re.compile(r"^#{1,4}\s+(.+)$")
+RECOMMENDATION_START_RE = re.compile(
+    r"^\s*>?\s*(?:[-*]\s*)?(?:\*\*)?(?:(?P<ada>\d{1,2}\.\d+[a-z]?)|"
+    r"(?P<label>recommendation|practice point)\s+(?P<other>\d[\dA-Za-z.-]*))",
+    flags=re.I,
+)
 
 QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "血糖": ("glucose", "glycemic", "hyperglycemia", "hypoglycemia", "blood glucose"),
@@ -363,6 +368,10 @@ class KnowledgeBase:
             if section.lower() in {"references", "reference"}:
                 continue
             parent_text = "\n".join(lines)
+            summary_chunk = section_summary_chunk(path.name, source_label, title, section or title, lines, parent_text)
+            if summary_chunk:
+                chunks.append(summary_chunk)
+            chunks.extend(recommendation_chunks_from_lines(path.name, source_label, title, section or title, lines, parent_text))
             buffer: list[str] = []
             size = 0
             for line in lines:
@@ -767,6 +776,91 @@ def table_chunks_from_lines(
     return chunks
 
 
+def section_summary_chunk(
+    source: str,
+    source_label: str,
+    title: str,
+    section: str,
+    lines: list[str],
+    parent_text: str,
+) -> KnowledgeChunk | None:
+    summary_lines = [line for line in lines if line and not line.startswith("|")][:8]
+    if not summary_lines:
+        return None
+    summary_text = "\n".join(
+        [
+            f"Section map: {title}",
+            f"Section: {section}",
+            "Key opening context:",
+            *summary_lines,
+        ]
+    )
+    metadata = structured_metadata(source_label, title, section, "section_summary", summary_text, parent_text)
+    return KnowledgeChunk(
+        source,
+        source_label,
+        title,
+        section,
+        "section_summary",
+        summary_text,
+        parent_text,
+        metadata,
+        chunk_tokens(source_label, title, section, "section_summary", summary_text, metadata),
+    )
+
+
+def recommendation_chunks_from_lines(
+    source: str,
+    source_label: str,
+    title: str,
+    section: str,
+    lines: list[str],
+    parent_text: str,
+) -> list[KnowledgeChunk]:
+    chunks: list[KnowledgeChunk] = []
+    for index, line in enumerate(lines):
+        match = RECOMMENDATION_START_RE.match(line)
+        if not match:
+            continue
+        recommendation_id = match.group("ada") or match.group("other") or ""
+        rec_lines = [line]
+        for follow in lines[index + 1 : index + 3]:
+            if RECOMMENDATION_START_RE.match(follow):
+                break
+            if looks_like_recommendation_continuation(follow):
+                rec_lines.append(follow)
+        chunk_text = "\n".join(rec_lines)
+        if recommendation_id:
+            chunk_text = f"Recommendation {recommendation_id}: {chunk_text}"
+        metadata = structured_metadata(source_label, title, section, "recommendation", chunk_text, parent_text)
+        chunks.append(
+            KnowledgeChunk(
+                source,
+                source_label,
+                title,
+                section,
+                "recommendation",
+                chunk_text,
+                parent_text,
+                metadata,
+                chunk_tokens(source_label, title, section, "recommendation", chunk_text, metadata),
+            )
+        )
+    return chunks
+
+
+def looks_like_recommendation_continuation(line: str) -> bool:
+    if not line or line.startswith("|") or "<tr" in line.lower():
+        return False
+    if re.match(r"^#{1,6}\s+", line):
+        return False
+    if re.match(r"^\s*>", line):
+        return True
+    return len(line) < 360 and bool(
+        re.search(r"\b(consider|recommend|should|may|screen|monitor|treat|assess|refer|prescribe|avoid)\b", line, flags=re.I)
+    )
+
+
 def section_parent_context(lines: list[str]) -> str:
     context_lines: list[str] = []
     for line in lines:
@@ -992,6 +1086,7 @@ def knowledge_status() -> dict[str, object]:
     dir_file_count = sum(len(list(root.rglob("*.md"))) for root in roots if root.exists() and root.is_dir())
     loaded_files_by_source: dict[str, int] = {}
     loaded_dirs_by_source: dict[str, list[str]] = {}
+    chunk_type_counts: dict[str, int] = {}
     if kb:
         for path in kb.source_files:
             label = guideline_source_label(str(path), path.read_text(encoding="utf-8", errors="ignore")[:5000])
@@ -1000,6 +1095,8 @@ def knowledge_status() -> dict[str, object]:
             loaded_dirs_by_source.setdefault(label, [])
             if dir_value not in loaded_dirs_by_source[label]:
                 loaded_dirs_by_source[label].append(dir_value)
+        for chunk in kb.chunks:
+            chunk_type_counts[chunk.chunk_type] = chunk_type_counts.get(chunk.chunk_type, 0) + 1
     return {
         "enabled": knowledge_enabled(),
         "dir": str(roots[0]) if roots else "",
@@ -1009,6 +1106,7 @@ def knowledge_status() -> dict[str, object]:
         "available": bool(kb),
         "strict": knowledge_strict_enabled(),
         "chunks": len(kb.chunks) if kb else 0,
+        "chunk_type_counts": chunk_type_counts,
         "metadata_tagged_chunks": sum(1 for chunk in kb.chunks if chunk.metadata) if kb else 0,
         "vector_index_chunks": len(kb.vector_index) if kb else 0,
         "files": len(kb.source_files) if kb else 0,
@@ -1094,10 +1192,15 @@ def structured_metadata(
     tags.append(f"chunk_type:{chunk_type}")
     if chunk_type == "table_row" or re.search(r"\btable\s+\d", haystack):
         tags.append("has_table")
-    if re.search(r"\brecommendations?\b|\*\*\d+\.\d+", haystack):
+    recommendation_match = re.search(r"\brecommendation\s+(\d[\dA-Za-z.-]*)|\*\*(\d{1,2}\.\d+[a-z]?)\*\*", text, flags=re.I)
+    if chunk_type == "recommendation" or re.search(r"\brecommendations?\b|\*\*\d+\.\d+", haystack):
         tags.append("has_recommendation")
-    if re.search(r"\b(a|b|c|e)\b\s*$|\*\*[abce]\*\*", text.strip(), flags=re.I):
+    if recommendation_match:
+        tags.append(f"recommendation_id:{recommendation_match.group(1) or recommendation_match.group(2)}")
+    grade_match = re.search(r"(?:\*\*)?\b([abce])\b(?:\*\*)?\s*$", text.strip(), flags=re.I)
+    if grade_match:
         tags.append("has_recommendation_grade")
+        tags.append(f"recommendation_grade:{grade_match.group(1).lower()}")
     if re.search(r"[<>≤≥=]\s*\d|\b\d+(?:\.\d+)?\s*(?:%|mg/dl|mmol/l|ml/min|mg/g)\b", haystack):
         tags.append("has_threshold")
 
@@ -1148,14 +1251,14 @@ def parent_excerpt_for_chunk(chunk: KnowledgeChunk, query_tokens: list[str]) -> 
 
 
 def chunk_dedup_key(chunk: KnowledgeChunk) -> tuple[str, ...]:
-    if chunk.chunk_type == "table_row":
+    if chunk.chunk_type in {"table_row", "recommendation"}:
         digest = hashlib.sha1(chunk.text[:500].encode("utf-8", errors="ignore")).hexdigest()[:12]
         return (chunk.source, chunk.section, chunk.chunk_type, digest)
     return (chunk.source, chunk.section, chunk.chunk_type)
 
 
 def hit_dedup_key(hit: KnowledgeHit) -> tuple[str, ...]:
-    if hit.chunk_type == "table_row":
+    if hit.chunk_type in {"table_row", "recommendation"}:
         digest = hashlib.sha1(hit.excerpt[:500].encode("utf-8", errors="ignore")).hexdigest()[:12]
         return (hit.source, hit.section, hit.chunk_type, digest)
     return (hit.source, hit.section, hit.chunk_type)
@@ -1741,11 +1844,23 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         any(term in query for term in ("適用", "適合", "哪些病人", "哪種病人", "誰可以", "使用對象"))
         or any(term in query_lower for term in ("indication", "recommended", "offered", "eligible", "who should"))
     )
+    vaccination_query = any(term in query for term in ("疫苗", "流感", "肺炎鏈球菌", "新冠", "帶狀皰疹")) or any(
+        term in query_lower for term in ("vaccine", "vaccination", "immunization", "influenza", "pneumococcal", "covid", "hepatitis")
+    )
 
     if chunk.chunk_type == "table_row":
         adjustment *= 1.25
+    if chunk.chunk_type == "recommendation":
+        adjustment *= 1.45
+    if chunk.chunk_type == "section_summary":
+        adjustment *= 1.08
     if re.search(r"\b(reference|references|acknowledg|appendix)\b", haystack):
         adjustment *= 0.35
+    if not vaccination_query and re.search(
+        r"\b(vaccin|immunization|influenza|pneumococcal|covid|hepatitis b|respiratory syncytial virus|rsv)\b",
+        haystack,
+    ):
+        adjustment *= 0.18
     if re.search(r"\b(recommendation|recommendations|treatment|therapy|selection|screening|diagnosis|pharmacologic|management|interventions)\b", haystack):
         adjustment *= 1.18
     if re.search(r"\b(egfr|albuminuria|uacr|mg/g|ml/min|contraindicat|avoid|dose|dosage|adjust|threshold|initiat|discontinu)\b", haystack):

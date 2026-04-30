@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-01-concept-routing-v19
+APP_VERSION=2026-05-01-guideline-index-v20
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -62,7 +62,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-01-concept-routing-v19
+APP_VERSION=2026-05-01-guideline-index-v20
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -215,15 +215,16 @@ Per message, the flow is:
    English terms, abbreviations, section words, and evidence targets.
 3. Search the mounted guideline Markdown files with hierarchical hybrid
    retrieval: multi-query BM25-style scoring, local hashed vector scoring,
-   source-aware scoring, section-aware scoring, and structured metadata tags
-   such as source, year, ADA chapter, table row type, CKD/eGFR/UACR, medication,
+   source-aware scoring, chapter/section map chunks, recommendation chunks,
+   section-aware scoring, and structured metadata tags
+   such as source, year, ADA chapter, recommendation id/grade, table row type, CKD/eGFR/UACR, medication,
    MASLD/MASH, pregnancy, older adults, and hospital/perioperative context.
 4. Apply clinical concept routing for common medical intents such as staging,
    treatment, screening, monitoring, indications, retinopathy, neuropathy, foot
    care, CKD, MASLD/MASH, pregnancy, and diabetes technology. This avoids adding
    a one-off keyword for every failed user phrase.
-5. Use parent-child retrieval. Text chunks and table rows rank independently,
-   but selected hits carry the parent section excerpt so recommendations,
+5. Use parent-child retrieval. Recommendations, text chunks, section summaries,
+   and table rows rank independently, but selected hits carry the parent section excerpt so recommendations,
    rationale, table footnotes, and safety limitations are read together.
 6. Merge candidates with source-balanced, coverage-aware, and MMR-style
    selection so KDIGO/AACE snippets are less likely to be crowded out by repeated
@@ -448,7 +449,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-01-concept-routing-v19",
+  "app_version": "2026-05-01-guideline-index-v20",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -465,6 +466,8 @@ The health check should include:
     "source_aware_reranking": true,
     "source_balanced_retrieval": true,
     "section_aware_retrieval": true,
+    "chapter_section_index": true,
+    "recommendation_aware_retrieval": true,
     "table_aware_retrieval": true,
     "multi_query_retrieval": true,
     "intent_query_variants": true,

@@ -74,7 +74,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-concept-routing-v19")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-01-guideline-index-v20")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -1615,6 +1615,8 @@ def health() -> dict[str, Any]:
             "source_aware_reranking": True,
             "source_balanced_retrieval": True,
             "section_aware_retrieval": True,
+            "chapter_section_index": True,
+            "recommendation_aware_retrieval": True,
             "table_aware_retrieval": True,
             "multi_query_retrieval": True,
             "intent_query_variants": True,
