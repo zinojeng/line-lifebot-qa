@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
 from contextlib import contextmanager
 from pathlib import Path
 import hashlib
@@ -78,7 +79,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-05-guideline-scope-rag-v26")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-05-parallel-verification-v27")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -118,6 +119,12 @@ LINE_RECURSIVE_COVERAGE_ENABLED = os.getenv("LINE_RECURSIVE_COVERAGE_ENABLED", "
 LINE_RECURSIVE_COVERAGE_MAX_QUERIES = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_QUERIES", "4"))
 LINE_RECURSIVE_COVERAGE_MAX_HITS = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_HITS", "4"))
 LINE_LONG_CONTEXT_VERIFICATION_ENABLED = os.getenv("LINE_LONG_CONTEXT_VERIFICATION_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_PARALLEL_VERIFICATION_ENABLED = os.getenv("LINE_PARALLEL_VERIFICATION_ENABLED", "1").strip().lower() not in {
     "0",
     "false",
     "no",
@@ -1503,6 +1510,51 @@ def long_context_says_unverified(verification: str) -> bool:
     return bool(re.search(r"VERIFIED\s*:\s*no\b", verification, flags=re.I))
 
 
+def build_parallel_evidence_checks(
+    api_key: str,
+    user_text: str,
+    selected_hits: list[KnowledgeHit],
+    clinical_intent: dict[str, Any] | None,
+    knowledge_text: str,
+) -> tuple[str, str]:
+    if (
+        not LINE_PARALLEL_VERIFICATION_ENABLED
+        or not LINE_EVIDENCE_REVIEW_ENABLED
+        or not LINE_LONG_CONTEXT_VERIFICATION_ENABLED
+        or not api_key
+        or not selected_hits
+    ):
+        evidence_review = build_evidence_review(api_key, user_text, knowledge_text, clinical_intent)
+        long_context_verification = build_long_context_verification(
+            api_key,
+            user_text,
+            selected_hits,
+            clinical_intent,
+            evidence_review,
+        )
+        return evidence_review, long_context_verification
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        evidence_future = executor.submit(
+            build_evidence_review,
+            api_key,
+            user_text,
+            knowledge_text,
+            clinical_intent,
+        )
+        verification_future = executor.submit(
+            build_long_context_verification,
+            api_key,
+            user_text,
+            selected_hits,
+            clinical_intent,
+            "",
+        )
+        evidence_review = evidence_future.result()
+        long_context_verification = verification_future.result()
+    return evidence_review, long_context_verification
+
+
 def evidence_review_prompt(review: str) -> str:
     if not review:
         return ""
@@ -1690,7 +1742,13 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         return knowledge_no_answer_text()
 
     knowledge_text = knowledge_prompt_from_hits(selected_hits)
-    evidence_review = build_evidence_review(api_key, user_text, knowledge_text, clinical_intent)
+    evidence_review, long_context_verification = build_parallel_evidence_checks(
+        api_key,
+        user_text,
+        selected_hits,
+        clinical_intent,
+        knowledge_text,
+    )
     if evidence_review_says_unanswerable(evidence_review):
         locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
         if not (
@@ -1703,13 +1761,6 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             + "\n\n本地 coverage override：此題屬於已載入指南涵蓋的慢性病照護範圍；"
             "請只回答指南片段能支持的部分，缺口要明確說明，不要補充片段外資訊，也不要給個人化劑量。"
         )
-    long_context_verification = build_long_context_verification(
-        api_key,
-        user_text,
-        selected_hits,
-        clinical_intent,
-        evidence_review,
-    )
     if long_context_says_unverified(long_context_verification):
         locally_answerable, _local_gap = local_evidence_coverage(user_text, selected_hits, clinical_intent)
         if not (
@@ -1826,6 +1877,7 @@ def health() -> dict[str, Any]:
             "local_hashed_vector_index": True,
             "inverted_index_retrieval": True,
             "long_context_verification": LINE_LONG_CONTEXT_VERIFICATION_ENABLED,
+            "parallel_evidence_verification": LINE_PARALLEL_VERIFICATION_ENABLED,
             "debug_search_endpoint": LINE_DEBUG_SEARCH_ENABLED,
             "guideline_strict_grounding_current": True,
             "guideline_query_planning_current": LINE_QUERY_PLANNING_ENABLED,
