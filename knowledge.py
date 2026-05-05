@@ -121,7 +121,9 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "心臟": ("cardiovascular", "heart", "ASCVD", "blood pressure", "lipid"),
     "心血管": ("cardiovascular", "ASCVD", "heart failure", "MACE", "cardiorenal"),
     "心衰竭": ("heart failure", "HF", "HFrEF", "HFpEF", "heart failure hospitalization"),
-    "血壓": ("blood pressure", "hypertension"),
+    "血壓": ("blood pressure", "BP", "hypertension", "blood pressure goal", "blood pressure target", "ADA section 10"),
+    "血壓控制": ("blood pressure control", "hypertension treatment", "blood pressure goal", "blood pressure target", "ADA section 10"),
+    "血壓控制目標": ("blood pressure goal", "blood pressure target", "on-treatment blood pressure goal", "<130/80 mmHg", "systolic blood pressure goal <120 mmHg", "ADA section 10", "Recommendation 10.3", "Recommendation 10.4"),
     "膽固醇": ("lipid", "cholesterol", "statin", "triglyceride"),
     "肝": ("liver", "hepatic", "steatotic liver disease", "MASLD", "MASH", "NAFLD", "NASH"),
     "脂肪肝": ("MASLD", "metabolic dysfunction-associated steatotic liver disease", "NAFLD", "fatty liver"),
@@ -165,7 +167,7 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
 
 QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (
-        ("血糖控制", "控制目標", "血糖目標", "目標", "glycemic goal", "glycemic target", "glucose target"),
+        ("血糖控制", "控制目標", "血糖目標", "glycemic goal", "glycemic target", "glucose target"),
         (
             "glycemic goals A1C goal setting and modifying glycemic goals individualized goals hypoglycemia risk",
             "blood glucose target preprandial postprandial time in range CGM metrics BGM",
@@ -248,7 +250,7 @@ QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         ("心", "血壓", "膽固醇", "cardiovascular", "ascvd", "hypertension", "lipid", "statin"),
         (
             "cardiovascular disease ASCVD heart failure blood pressure lipid statin risk management",
-            "hypertension treatment goal cholesterol triglyceride cardiovascular risk",
+            "hypertension treatment goal blood pressure target on-treatment blood pressure goal cholesterol triglyceride cardiovascular risk",
         ),
     ),
     (
@@ -593,6 +595,51 @@ class KnowledgeBase:
                 for rank, hit in enumerate(self.search(priority_query, limit=max(limit, 10), excerpt_chars=excerpt_chars), start=1):
                     key = hit_dedup_key(hit)
                     fused_score = hit.score * 50.0 + 10000.0 / (rank + 1)
+                    existing = candidates.get(key)
+                    if not existing or fused_score > existing.score:
+                        candidates[key] = KnowledgeHit(
+                            source=hit.source,
+                            source_label=hit.source_label,
+                            title=hit.title,
+                            section=hit.section,
+                            chunk_type=hit.chunk_type,
+                            excerpt=hit.excerpt,
+                            parent_excerpt=hit.parent_excerpt,
+                            metadata=hit.metadata,
+                            score=fused_score,
+                        )
+        if "blood_pressure_target" in query_concepts(query, query.lower()):
+            priority_queries = (
+                "dc26s010 Treatment Goals blood pressure goals hypertension Recommendation 10.3 Recommendation 10.4 on-treatment blood pressure goal <130/80 mmHg systolic blood pressure goal <120 mmHg high cardiovascular kidney risk",
+                "KDIGO diabetes CKD blood pressure target <130/80 mmHg hypertension cardiovascular kidney risk albuminuria",
+            )
+            for priority_query in priority_queries:
+                for rank, hit in enumerate(self.search(priority_query, limit=max(limit, 10), excerpt_chars=excerpt_chars), start=1):
+                    key = hit_dedup_key(hit)
+                    fused_score = hit.score * 45.0 + 9000.0 / (rank + 1)
+                    existing = candidates.get(key)
+                    if not existing or fused_score > existing.score:
+                        candidates[key] = KnowledgeHit(
+                            source=hit.source,
+                            source_label=hit.source_label,
+                            title=hit.title,
+                            section=hit.section,
+                            chunk_type=hit.chunk_type,
+                            excerpt=hit.excerpt,
+                            parent_excerpt=hit.parent_excerpt,
+                            metadata=hit.metadata,
+                            score=fused_score,
+                        )
+        if "lipid_target" in query_concepts(query, query.lower()):
+            priority_queries = (
+                "dc26s010 Lipid Management Recommendation 10.20 LDL cholesterol goal <70 mg/dL high-intensity statin primary prevention diabetes ASCVD risk factors",
+                "dc26s010 Secondary Prevention Recommendation 10.27 LDL cholesterol goal <55 mg/dL high-intensity statin ezetimibe PCSK9 inhibitor ASCVD diabetes",
+                "AACE dyslipidemia algorithm LDL-C goal <70 mg/dL T2D ASCVD risk factor statin PCSK9 bempedoic acid hypertriglyceridemia",
+            )
+            for priority_query in priority_queries:
+                for rank, hit in enumerate(self.search(priority_query, limit=max(limit, 10), excerpt_chars=excerpt_chars), start=1):
+                    key = hit_dedup_key(hit)
+                    fused_score = hit.score * 55.0 + 11000.0 / (rank + 1)
                     existing = candidates.get(key)
                     if not existing or fused_score > existing.score:
                         candidates[key] = KnowledgeHit(
@@ -1876,6 +1923,21 @@ def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
                 ),
             ]
         )
+    if "blood_pressure_target" in concepts:
+        variants.extend(
+            [
+                QueryVariant(
+                    "concept_bp_target_ada_s10",
+                    f"{query} ADA section 10 dc26s010 Cardiovascular Disease and Risk Management Treatment Goals blood pressure goals hypertension Recommendation 10.3 Recommendation 10.4 on-treatment blood pressure goal <130/80 mmHg systolic blood pressure goal <120 mmHg high cardiovascular or kidney risk individualized shared decision-making adverse effects",
+                    0.98,
+                ),
+                QueryVariant(
+                    "concept_bp_target_kdigo",
+                    f"{query} KDIGO diabetes CKD blood pressure management BP target <130/80 mmHg hypertension albuminuria cardiovascular kidney risk",
+                    0.88,
+                ),
+            ]
+        )
     if "hospital_steroid_hyperglycemia" in concepts:
         variants.extend(
             [
@@ -1919,6 +1981,48 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
         "search_queries": [
             "ADA section 10 cardiovascular disease risk management peripheral artery disease PAD ASCVD antiplatelet aspirin clopidogrel rivaroxaban statin lipid blood pressure smoking cessation",
             "ADA section 12 foot care peripheral artery disease PAD lower extremity claudication ABI toe pressures vascular assessment revascularization gangrene amputation semaglutide STRIDE limb outcomes",
+        ],
+    },
+    "blood_pressure_target": {
+        "concepts": ["blood pressure goal", "hypertension treatment target", "cardiovascular risk management"],
+        "target_chapters": [
+            "ADA S10 Cardiovascular Disease and Risk Management",
+            "KDIGO Diabetes and CKD cardiovascular and kidney risk management when CKD is relevant",
+        ],
+        "evidence_targets": [
+            "ADA S10 Treatment Goals",
+            "Recommendation 10.3 individualized blood pressure goals",
+            "Recommendation 10.4 on-treatment blood pressure goal <130/80 mmHg if safely attained",
+            "systolic blood pressure goal <120 mmHg encouraged in high cardiovascular or kidney risk if safe",
+            "older adults, pregnancy, orthostatic/autonomic neuropathy, adverse effects, and shared decision-making exceptions",
+        ],
+        "avoid_routes": [
+            "do not answer blood pressure target from glycemic goal or A1C target sections",
+            "do not answer from glucose-lowering medication tables alone",
+        ],
+        "required_facets": ["blood_pressure_target", "ascvd_context", "treatment"],
+        "search_queries": [
+            "ADA section 10 dc26s010 Treatment Goals blood pressure goals hypertension Recommendation 10.3 Recommendation 10.4 on-treatment blood pressure goal <130/80 mmHg systolic blood pressure goal <120 mmHg high cardiovascular kidney risk",
+            "KDIGO diabetes CKD blood pressure target <130/80 mmHg hypertension cardiovascular kidney risk albuminuria",
+        ],
+    },
+    "lipid_target": {
+        "concepts": ["lipid management", "LDL cholesterol goal", "statin therapy", "ASCVD risk management"],
+        "target_chapters": ["ADA S10 Cardiovascular Disease and Risk Management", "AACE T2D comprehensive care when relevant"],
+        "evidence_targets": [
+            "ADA S10 lipid management recommendations",
+            "LDL cholesterol / non-HDL / triglyceride context when present",
+            "statin intensity and ASCVD primary or secondary prevention",
+            "combination lipid-lowering therapy if guideline snippets support it",
+        ],
+        "avoid_routes": [
+            "do not answer lipid targets from ADA S6 glycemic target sections",
+            "do not answer from glucose-lowering medication tables alone",
+        ],
+        "required_facets": ["ascvd_context", "treatment", "threshold"],
+        "search_queries": [
+            "ADA section 10 dc26s010 lipid management LDL cholesterol statin therapy primary prevention secondary prevention ASCVD triglycerides treatment recommendations",
+            "AACE type 2 diabetes comprehensive care dyslipidemia lipid LDL cholesterol statin ASCVD risk management",
         ],
     },
     "retinopathy": {
@@ -2023,6 +2127,8 @@ def clinical_search_brain_plan(query: str) -> dict[str, list[str]]:
         term in lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
     ):
         concepts.add("hyperglycemic_crisis")
+    if "blood_pressure_target" in query_concepts(query, lower):
+        concepts.add("blood_pressure_target")
     if "hospital_steroid_hyperglycemia" in query_concepts(query, lower):
         concepts.add("hospital_steroid_hyperglycemia")
 
@@ -2085,6 +2191,22 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
         term in lower for term in ("treatment", "therapy", "intervention", "anti-vegf", "photocoagulation", "vitrectomy")
     ):
         concepts.add("treatment")
+    if (
+        any(term in query for term in ("血壓", "高血壓"))
+        or any(term in lower for term in ("blood pressure", "hypertension", "bp target", "bp goal"))
+    ) and (
+        any(term in query for term in ("目標", "控制", "標準", "多少", "幾"))
+        or any(term in lower for term in ("goal", "target", "control", "threshold"))
+    ):
+        concepts.add("blood_pressure_target")
+    if (
+        any(term in query for term in ("血脂", "膽固醇", "三酸甘油脂", "低密度膽固醇", "LDL"))
+        or any(term in lower for term in ("lipid", "cholesterol", "ldl", "triglyceride", "statin", "dyslipidemia"))
+    ) and (
+        any(term in query for term in ("目標", "控制", "標準", "多少", "治療", "用藥"))
+        or any(term in lower for term in ("goal", "target", "control", "threshold", "treatment", "therapy"))
+    ):
+        concepts.add("lipid_target")
     if any(term in query for term in ("HHNK", "高滲透壓", "高血糖高滲透壓", "高血糖急症", "酮酸", "酮酸中毒")) or any(
         term in lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
     ):
@@ -2118,7 +2240,23 @@ def coverage_query_variants(query: str, query_lower: str) -> list[QueryVariant]:
         term in query_lower for term in ("older", "geriatric", "frailty")
     )
     steroid_hospital_query = "hospital_steroid_hyperglycemia" in query_concepts(query, query_lower)
+    blood_pressure_target_query = "blood_pressure_target" in query_concepts(query, query_lower)
 
+    if blood_pressure_target_query:
+        variants.extend(
+            [
+                QueryVariant(
+                    "coverage_bp_target_ada",
+                    f"{query} ADA section 10 dc26s010 Treatment Goals blood pressure goals hypertension Recommendation 10.3 Recommendation 10.4 on-treatment blood pressure goal <130/80 mmHg systolic blood pressure goal <120 mmHg high cardiovascular kidney risk individualized shared decision-making",
+                    0.94,
+                ),
+                QueryVariant(
+                    "coverage_bp_target_kdigo",
+                    f"{query} KDIGO diabetes CKD blood pressure BP target <130/80 mmHg hypertension albuminuria cardiovascular kidney risk",
+                    0.86,
+                ),
+            ]
+        )
     if steroid_hospital_query:
         variants.extend(
             [
@@ -2261,6 +2399,8 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
 
 def preferred_source_from_query(query: str) -> str:
     lower = query.lower()
+    if "blood_pressure_target" in query_concepts(query, lower):
+        return "ada"
     if "kdigo" in lower:
         return "kdigo"
     if "aace" in lower:
@@ -2312,10 +2452,22 @@ def required_facets(query: str) -> set[str]:
         term in lower for term in ("dialysis", "kidney", "ckd", "egfr", "eskd", "esrd")
     ):
         facets.add("kidney_context")
-    if any(term in query for term in ("血糖控制", "控制目標", "血糖目標", "目標")) or any(
+    if (
+        (
+            any(term in query for term in ("血糖控制", "血糖目標", "糖化血色素目標", "糖化血色素", "血糖", "連續血糖"))
+            or any(term in lower for term in ("a1c", "hba1c", "glycemic", "glucose", "cgm", "tir", "time in range"))
+        )
+        and (any(term in query for term in ("目標", "控制", "標準", "多少")) or any(term in lower for term in ("goal", "target", "control")))
+    ) or any(
         term in lower for term in ("glycemic goal", "glycemic target", "glucose target", "a1c goal")
     ):
         facets.add("glycemic_target")
+    if "blood_pressure_target" in concepts:
+        facets.discard("glycemic_target")
+        facets.update({"blood_pressure_target", "ascvd_context", "treatment"})
+    if "lipid_target" in concepts:
+        facets.discard("glycemic_target")
+        facets.update({"ascvd_context", "treatment", "threshold"})
     if any(term in query for term in ("洗腎", "透析", "腎衰竭")) or any(
         term in lower for term in ("dialysis", "kidney failure", "eskd", "esrd")
     ):
@@ -2381,7 +2533,10 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
     facets: set[str] = set()
     if re.search(r"\b(ckd|kidney|renal|egfr|albuminuria|uacr|dialysis|eskd|esrd)\b", haystack):
         facets.add("kidney_context")
-    if re.search(r"\b(glycemic goal|glycemic target|glucose target|a1c goal|individualized goal|treatment goals)\b", haystack):
+    if re.search(
+        r"\b(glycemic goal|glycemic goals|glycemic target|glucose target|a1c goal|a1c goals|individualized a1c|individualized .*cgm goals|time in range goal|tir goal|table 6\.2|figure 6\.1)\b",
+        haystack,
+    ):
         facets.add("glycemic_target")
     if re.search(r"\b(a1c.*less reliable|less reliable.*a1c|glycated albumin|fructosamine|red blood cell turnover)\b", haystack):
         facets.add("a1c_reliability")
@@ -2411,6 +2566,10 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
         facets.add("pad_context")
     if re.search(r"\b(ascvd|cardiovascular disease|antiplatelet|aspirin|clopidogrel|rivaroxaban|statin|lipid|blood pressure|smoking cessation)\b", haystack):
         facets.add("ascvd_context")
+    if re.search(r"\b(blood pressure|hypertension|bp)\b", haystack):
+        facets.add("ascvd_context")
+    if re.search(r"\b(blood pressure goal|blood pressure goals|blood pressure target|on-treatment blood pressure goal|systolic blood pressure goal|treatment goals|<130/80|<120|mmhg)\b", haystack):
+        facets.update({"blood_pressure_target", "threshold", "treatment"})
     if re.search(r"\b(annually|every \d|months?|yearly|frequency|examination frequency|at least yearly)\b", haystack):
         facets.add("frequency")
     if re.search(r"\b(pregnancy|gestational|gdm|preconception|postpartum)\b", haystack):
@@ -2581,6 +2740,8 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     vaccination_query = any(term in query for term in ("疫苗", "流感", "肺炎鏈球菌", "新冠", "帶狀皰疹")) or any(
         term in query_lower for term in ("vaccine", "vaccination", "immunization", "influenza", "pneumococcal", "covid", "hepatitis")
     )
+    blood_pressure_target_query = "blood_pressure_target" in concepts
+    lipid_target_query = "lipid_target" in concepts
 
     if chunk.chunk_type == "table_row":
         adjustment *= 1.25
@@ -2629,6 +2790,26 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 1.18
     if re.search(r"\b(egfr|albuminuria|uacr|mg/g|ml/min|contraindicat|avoid|dose|dosage|adjust|threshold|initiat|discontinu)\b", haystack):
         adjustment *= 1.18
+    if blood_pressure_target_query and ("dc26s010" in haystack or "cardiovascular disease and risk management" in haystack):
+        adjustment *= 5.0
+    if blood_pressure_target_query and re.search(
+        r"\b(treatment goals|blood pressure goal|blood pressure goals|blood pressure target|on-treatment blood pressure goal|systolic blood pressure goal|hypertension|<130/80|<120|mmhg|10\.3|10\.4|shared decision-making|cardiovascular or kidney risk)\b",
+        haystack,
+    ):
+        adjustment *= 4.0
+    if blood_pressure_target_query and ("dc26s012" in haystack or "peripheral artery disease" in haystack or "pad" in haystack):
+        adjustment *= 0.18
+    if blood_pressure_target_query and ("dc26s006" in haystack or "glycemic goals" in haystack or "a1c" in haystack):
+        adjustment *= 0.12
+    if lipid_target_query and ("dc26s010" in haystack or "cardiovascular disease and risk management" in haystack):
+        adjustment *= 4.5
+    if lipid_target_query and re.search(
+        r"\b(lipid|ldl|cholesterol|triglyceride|statin|ezetimibe|pcsk9|bempedoic|inclisiran|secondary prevention|primary prevention|ascvd)\b",
+        haystack,
+    ):
+        adjustment *= 3.5
+    if lipid_target_query and ("dc26s006" in haystack or "glycemic goals" in haystack or "a1c" in haystack):
+        adjustment *= 0.12
     if "kdigo" in query_lower:
         adjustment *= 2.6 if "kdigo" in haystack else 0.58
     if "aace" in query_lower:

@@ -159,7 +159,7 @@ avoid_routes:
 目前版本：
 
 ```text
-2026-05-01-no-multiagent-hermes-brain-v25
+2026-05-05-guideline-scope-rag-v26
 ```
 
 相關 feature flag：
