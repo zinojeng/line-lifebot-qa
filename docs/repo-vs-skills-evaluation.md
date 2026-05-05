@@ -31,7 +31,19 @@ line-lifebot-qa/docs
 - GitHub / Zeabur 操作
 - 測試案例與 benchmark
 
-之後如果某些流程穩定，再建立 skill，例如：
+現在已經建立第一個穩定 skill：
+
+```text
+skills/hermes-guideline-rag-maintainer/SKILL.md
+```
+
+用途：
+
+- 維護 ADA/AACE/KDIGO Markdown-based guideline RAG
+- debug no-answer / wrong-source / wrong-chapter retrieval
+- 保留這次從錯誤方法修正到穩定方法的經驗
+
+之後如果其他流程也穩定，再建立更多 skill，例如：
 
 ```text
 skills/hermes-guideline-rag-maintainer/SKILL.md
@@ -55,4 +67,3 @@ skill 可以包含：
 - Zeabur 綁定與 GitHub fork workflow 也剛穩定
 
 若太早做 skill，容易把還在變動的流程固定死。先用 repo docs 做共同記憶，比較穩。
-
