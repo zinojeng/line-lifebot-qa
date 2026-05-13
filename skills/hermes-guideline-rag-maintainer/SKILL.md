@@ -17,6 +17,7 @@ Preferred answer pipeline:
 user question
 -> clinical scope gate
 -> lightweight clinical query planner
+-> compiled guideline artifacts when available
 -> guideline-aware hybrid retrieval
 -> parent/section/table context expansion
 -> coverage check
@@ -37,6 +38,7 @@ Keep these design choices:
 - Reject only questions outside loaded scope, such as weather or unrelated general topics.
 - Keep heavy multi-agent work out of normal user-facing retrieval. Use agents for debug, analysis, or test generation only.
 - Keep parallel evidence verification enabled when available to reduce latency without removing safety checks.
+- Prefer compiled guideline artifacts when they exist: recommendation cards, table facts, concept pages, cross-guideline comparison records, and clinical task artifacts. Treat them as a derived evidence layer, not as a replacement for raw source Markdown.
 
 ## Debug Workflow
 
@@ -68,6 +70,7 @@ Do not return to these patterns:
 - Putting whole guidelines into every prompt as the default path.
 - Depending only on dense embeddings; medical QA needs exact thresholds, abbreviations, tables, and recommendation numbers.
 - Letting the LLM answer from memory when guideline snippets are missing.
+- Treating Pinecone Nexus/KnowQL, Google Knowledge Catalog, Microsoft Fabric IQ, or LLM Wiki posts as neutral clinical evidence. Use them as architectural inspiration only.
 
 ## Speed Rules
 
@@ -85,4 +88,4 @@ Accuracy is more important than raw speed for medical QA, but use these safe spe
 For detailed lessons and example failure patterns, read:
 
 - `references/guideline-rag-lessons.md`
-
+- `../../docs/compiled-guideline-knowledge-layer.md`

@@ -7,6 +7,7 @@ The stable pattern was not pure RAG, pure long context, pure agents, or Notebook
 ```text
 guideline Markdown source of truth
 + lightweight Hermes clinical brain
++ compiled guideline knowledge artifacts where available
 + guideline-aware hybrid retrieval
 + parent-child context
 + coverage-aware answer gate
@@ -14,6 +15,21 @@ guideline Markdown source of truth
 ```
 
 The bot should answer from uploaded ADA/AACE/KDIGO Markdown files. The LLM's role is to understand the user question, plan searches, synthesize retrieved evidence, and explain limitations. The LLM should not use model memory as the source of medical facts.
+
+## 2026 Knowledge Layer Update
+
+Pinecone Nexus/KnowQL, Karpathy's LLM Wiki, Google Knowledge Catalog, and Microsoft Fabric IQ all point in a similar architectural direction: do not force the agent to rediscover knowledge from raw chunks on every query. Build a structured knowledge layer first, then retrieve from that layer with citations and controls.
+
+For this project, the safe medical interpretation is:
+
+```text
+raw ADA/AACE/KDIGO Markdown remains the source of truth
+-> compiled guideline artifacts are derived from the raw sources
+-> artifacts speed up and stabilize retrieval
+-> raw parent sections remain available for verification
+```
+
+Do not overstate the external claims. Pinecone's benchmark is vendor-designed and based on financial 10-K filings, not clinical guideline QA. Use it as product/architecture inspiration, not medical validation.
 
 ## Key Current Components
 
@@ -130,6 +146,14 @@ Problem: full context feels simple but is slower, harder to debug, and less sour
 
 Fix: use retrieval first, then long-context verification on relevant parent sections.
 
+### Mistake 9: query-time rediscovery forever
+
+Problem: even a good RAG system may repeatedly search raw guideline chunks and reconstruct the same clinical synthesis for common questions.
+
+Symptom: answers are correct but latency and token use rise, especially for broad topics like CGM interpretation, DKA/HHS, CKD medication selection, BP targets, or dyslipidemia.
+
+Fix: compile durable guideline artifacts at ingestion time: recommendation cards, table facts, concept pages, clinical task artifacts, and cross-guideline comparison records. Retrieve artifacts first, then fall back to raw sections only when coverage is missing or verification is needed.
+
 ## Regression Questions To Keep
 
 Use these whenever changing retrieval:
@@ -168,4 +192,3 @@ git push zeabur main
 ```
 
 Verify deployed health version after push.
-

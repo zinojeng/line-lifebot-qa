@@ -370,6 +370,7 @@ class KnowledgeBase:
         self.dense_embedding_error = ""
         self.document_frequency: dict[str, int] = {}
         self.average_length = 1.0
+        self.compiled_artifact_count = 0
         self.load()
 
     def load(self) -> None:
@@ -377,6 +378,10 @@ class KnowledgeBase:
         source_files = knowledge_source_files(self.roots, self.extra_paths)
         for path in source_files:
             chunks.extend(self._chunks_from_file(path))
+        compiled_artifacts = compiled_guideline_artifacts(chunks)
+        self.compiled_artifact_count = len(compiled_artifacts)
+        if compiled_artifacts and compiled_knowledge_enabled():
+            chunks = [*compiled_artifacts, *chunks]
         self.source_files = source_files
         self.chunks = chunks
         self.vector_index = [hashed_vector(chunk.tokens) for chunk in chunks]
@@ -689,6 +694,15 @@ def knowledge_enabled() -> bool:
 
 def knowledge_strict_enabled() -> bool:
     return os.getenv("LINE_KNOWLEDGE_STRICT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def compiled_knowledge_enabled() -> bool:
+    return os.getenv("LINE_COMPILED_KNOWLEDGE_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
 
 
 def knowledge_dir() -> Path:
@@ -1038,6 +1052,100 @@ def looks_like_recommendation_continuation(line: str) -> bool:
     )
 
 
+def compiled_guideline_artifacts(chunks: list[KnowledgeChunk]) -> list[KnowledgeChunk]:
+    if not chunks:
+        return []
+
+    artifacts: list[KnowledgeChunk] = []
+    max_per_section = max(1, int(os.getenv("LINE_COMPILED_ARTIFACT_MAX_PER_SECTION", "12")))
+    per_section_counts: dict[tuple[str, str, str], int] = {}
+
+    for chunk in chunks:
+        if chunk.chunk_type not in {"recommendation", "table_row", "section_summary"}:
+            continue
+        section_key = (chunk.source, chunk.section, chunk.chunk_type)
+        per_section_counts[section_key] = per_section_counts.get(section_key, 0) + 1
+        if per_section_counts[section_key] > max_per_section:
+            continue
+
+        artifact_type = {
+            "recommendation": "compiled_recommendation",
+            "table_row": "compiled_table_fact",
+            "section_summary": "compiled_section_map",
+        }[chunk.chunk_type]
+        artifact_text = compiled_artifact_text(chunk, artifact_type)
+        artifact_metadata = structured_metadata(
+            chunk.source_label,
+            chunk.title,
+            chunk.section,
+            artifact_type,
+            artifact_text,
+            chunk.parent_text,
+        )
+        artifact_metadata = tuple(
+            dedupe_terms(
+                [
+                    *artifact_metadata,
+                    "compiled_artifact",
+                    f"artifact_type:{artifact_type}",
+                    f"derived_chunk_type:{chunk.chunk_type}",
+                    "raw_markdown_source_of_truth",
+                ]
+            )
+        )
+        artifacts.append(
+            KnowledgeChunk(
+                chunk.source,
+                chunk.source_label,
+                chunk.title,
+                chunk.section,
+                artifact_type,
+                artifact_text,
+                chunk.parent_text,
+                artifact_metadata,
+                chunk_tokens(chunk.source_label, chunk.title, chunk.section, artifact_type, artifact_text, artifact_metadata),
+            )
+        )
+    return artifacts
+
+
+def compiled_artifact_text(chunk: KnowledgeChunk, artifact_type: str) -> str:
+    facets = sorted(
+        hit_facets_from_text(
+            chunk.source,
+            chunk.source_label,
+            chunk.title,
+            chunk.section,
+            chunk.chunk_type,
+            chunk.text,
+            chunk.parent_text,
+            chunk.metadata,
+        )
+    )
+    metadata = ", ".join(chunk.metadata[:18])
+    source_pointer = f"{chunk.source_label} | {chunk.title} | {chunk.section} | source file: {chunk.source}"
+    if artifact_type == "compiled_recommendation":
+        label = "Compiled recommendation artifact"
+        task = "Use for recommendation-first retrieval. Verify against raw parent section before final synthesis."
+    elif artifact_type == "compiled_table_fact":
+        label = "Compiled table fact artifact"
+        task = "Use for table-aware retrieval of thresholds, rows, columns, and footnotes. Verify against raw table/parent section."
+    else:
+        label = "Compiled section map artifact"
+        task = "Use for chapter and section routing. This summarizes where evidence lives, not a standalone clinical recommendation."
+    return "\n".join(
+        [
+            label,
+            f"Guideline source: {source_pointer}",
+            f"Clinical retrieval role: {task}",
+            f"Clinical facets: {', '.join(facets) or 'none'}",
+            f"Structured metadata: {metadata or 'none'}",
+            "Derived evidence:",
+            chunk.text,
+        ]
+    )
+
+
 def section_parent_context(lines: list[str]) -> str:
     context_lines: list[str] = []
     for line in lines:
@@ -1287,6 +1395,8 @@ def knowledge_status() -> dict[str, object]:
         "strict": knowledge_strict_enabled(),
         "chunks": len(kb.chunks) if kb else 0,
         "chunk_type_counts": chunk_type_counts,
+        "compiled_knowledge_enabled": compiled_knowledge_enabled(),
+        "compiled_artifacts": kb.compiled_artifact_count if kb else 0,
         "metadata_tagged_chunks": sum(1 for chunk in kb.chunks if chunk.metadata) if kb else 0,
         "inverted_index_enabled": inverted_index_enabled(),
         "inverted_index_terms": len(kb.token_postings) if kb else 0,
@@ -1714,14 +1824,14 @@ def parent_excerpt_for_chunk(chunk: KnowledgeChunk, query_tokens: list[str]) -> 
 
 
 def chunk_dedup_key(chunk: KnowledgeChunk) -> tuple[str, ...]:
-    if chunk.chunk_type in {"table_row", "recommendation"}:
+    if chunk.chunk_type in {"table_row", "recommendation"} or chunk.chunk_type.startswith("compiled_"):
         digest = hashlib.sha1(chunk.text[:500].encode("utf-8", errors="ignore")).hexdigest()[:12]
         return (chunk.source, chunk.section, chunk.chunk_type, digest)
     return (chunk.source, chunk.section, chunk.chunk_type)
 
 
 def hit_dedup_key(hit: KnowledgeHit) -> tuple[str, ...]:
-    if hit.chunk_type in {"table_row", "recommendation"}:
+    if hit.chunk_type in {"table_row", "recommendation"} or hit.chunk_type.startswith("compiled_"):
         digest = hashlib.sha1(hit.excerpt[:500].encode("utf-8", errors="ignore")).hexdigest()[:12]
         return (hit.source, hit.section, hit.chunk_type, digest)
     return (hit.source, hit.section, hit.chunk_type)
@@ -2525,10 +2635,19 @@ def required_facets(query: str) -> set[str]:
     return facets
 
 
-def hit_facets(hit: KnowledgeHit) -> set[str]:
+def hit_facets_from_text(
+    source: str,
+    source_label: str,
+    title: str,
+    section: str,
+    chunk_type: str,
+    excerpt: str,
+    parent_excerpt: str,
+    metadata: tuple[str, ...],
+) -> set[str]:
     haystack = (
-        f"{hit.source} {hit.source_label} {hit.title} {hit.section} {hit.chunk_type} "
-        f"{' '.join(hit.metadata)} {hit.excerpt} {hit.parent_excerpt[:900]}"
+        f"{source} {source_label} {title} {section} {chunk_type} "
+        f"{' '.join(metadata)} {excerpt} {parent_excerpt[:900]}"
     ).lower()
     facets: set[str] = set()
     if re.search(r"\b(ckd|kidney|renal|egfr|albuminuria|uacr|dialysis|eskd|esrd)\b", haystack):
@@ -2584,7 +2703,7 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
         facets.add("hypoglycemia")
     if re.search(r"\b(treatment|therapy|management|intervention|recommendation|recommended|prescribed)\b", haystack):
         facets.add("treatment")
-    if hit.chunk_type == "table_row":
+    if chunk_type in {"table_row", "compiled_table_fact"}:
         facets.add("table")
     if "kdigo" in haystack:
         facets.add("source_kdigo")
@@ -2593,6 +2712,19 @@ def hit_facets(hit: KnowledgeHit) -> set[str]:
     elif "ada standards" in haystack or re.search(r"\bdc26s\d+\b", haystack):
         facets.add("source_ada")
     return facets
+
+
+def hit_facets(hit: KnowledgeHit) -> set[str]:
+    return hit_facets_from_text(
+        hit.source,
+        hit.source_label,
+        hit.title,
+        hit.section,
+        hit.chunk_type,
+        hit.excerpt,
+        hit.parent_excerpt,
+        hit.metadata,
+    )
 
 
 def text_similarity(left: str, right: str) -> float:
@@ -2749,6 +2881,12 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 1.45
     if chunk.chunk_type == "section_summary":
         adjustment *= 1.08
+    if chunk.chunk_type == "compiled_recommendation":
+        adjustment *= 1.65
+    if chunk.chunk_type == "compiled_table_fact":
+        adjustment *= 1.5
+    if chunk.chunk_type == "compiled_section_map":
+        adjustment *= 0.58
     if re.search(r"\b(reference|references|acknowledg|appendix)\b", haystack):
         adjustment *= 0.35
     if not vaccination_query and re.search(
@@ -2792,13 +2930,17 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 1.18
     if blood_pressure_target_query and ("dc26s010" in haystack or "cardiovascular disease and risk management" in haystack):
         adjustment *= 5.0
+    if blood_pressure_target_query and "treatment goals" in haystack:
+        adjustment *= 3.0
+    if blood_pressure_target_query and "pharmacologic interventions" in haystack:
+        adjustment *= 0.55
     if blood_pressure_target_query and re.search(
         r"\b(treatment goals|blood pressure goal|blood pressure goals|blood pressure target|on-treatment blood pressure goal|systolic blood pressure goal|hypertension|<130/80|<120|mmhg|10\.3|10\.4|shared decision-making|cardiovascular or kidney risk)\b",
         haystack,
     ):
         adjustment *= 4.0
     if blood_pressure_target_query and ("dc26s012" in haystack or "peripheral artery disease" in haystack or "pad" in haystack):
-        adjustment *= 0.18
+        adjustment *= 0.03
     if blood_pressure_target_query and ("dc26s006" in haystack or "glycemic goals" in haystack or "a1c" in haystack):
         adjustment *= 0.12
     if lipid_target_query and ("dc26s010" in haystack or "cardiovascular disease and risk management" in haystack):
