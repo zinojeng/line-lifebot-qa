@@ -705,6 +705,15 @@ def compiled_knowledge_enabled() -> bool:
     }
 
 
+def compiled_cross_guideline_enabled() -> bool:
+    return os.getenv("LINE_COMPILED_CROSS_GUIDELINE_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
 def knowledge_dir() -> Path:
     return knowledge_dirs()[0]
 
@@ -1106,7 +1115,325 @@ def compiled_guideline_artifacts(chunks: list[KnowledgeChunk]) -> list[Knowledge
                 chunk_tokens(chunk.source_label, chunk.title, chunk.section, artifact_type, artifact_text, artifact_metadata),
             )
         )
+    concept_records = compiled_concept_evidence_records(chunks)
+    artifacts.extend(compiled_concept_artifacts(concept_records))
+    if compiled_cross_guideline_enabled():
+        artifacts.extend(compiled_cross_guideline_artifacts(concept_records))
     return artifacts
+
+
+def compiled_concept_specs() -> dict[str, dict[str, object]]:
+    return {
+        "glycemic_targets": {
+            "label": "Glycemic targets and glucose goals",
+            "aliases": ("血糖控制目標", "A1C goal", "glycemic goals", "time in range target"),
+            "facets": ("glycemic_target",),
+            "patterns": (r"\b(glycemic goal|a1c goal|glucose target|time in range|tir goal)\b",),
+        },
+        "cgm_metrics": {
+            "label": "CGM indications and interpretation metrics",
+            "aliases": ("CGM 判讀", "TIR", "GMI", "time below range", "continuous glucose monitoring"),
+            "facets": ("monitoring", "technology_indication"),
+            "patterns": (r"\b(cgm|continuous glucose monitoring|time in range|time below range|time above range|gmi|glucose variability)\b",),
+        },
+        "ckd_medication": {
+            "label": "Diabetes with CKD medication selection",
+            "aliases": ("CKD 用藥", "eGFR", "UACR", "SGLT2 inhibitor", "finerenone"),
+            "facets": ("kidney_context", "medication"),
+            "patterns": (r"\b(ckd|kidney|renal|egfr|albuminuria|uacr|sglt2|finerenone|nsmra)\b",),
+        },
+        "blood_pressure_target": {
+            "label": "Blood pressure goals in diabetes",
+            "aliases": ("血壓控制目標", "BP target", "hypertension treatment goal"),
+            "facets": ("blood_pressure_target",),
+            "patterns": (r"\b(blood pressure goal|blood pressure target|on-treatment blood pressure|hypertension)\b",),
+        },
+        "lipid_target": {
+            "label": "Dyslipidemia and LDL treatment targets",
+            "aliases": ("血脂治療目標", "LDL-C goal", "statin therapy", "triglyceride"),
+            "facets": ("ascvd_context", "threshold", "treatment"),
+            "patterns": (r"\b(ldl|cholesterol|lipid|statin|triglyceride|ezetimibe|pcsk9|bempedoic)\b",),
+        },
+        "hyperglycemic_crisis": {
+            "label": "DKA/HHS diagnosis and management",
+            "aliases": ("HHNK", "HHS", "DKA", "酮酸中毒", "高滲透壓"),
+            "facets": ("hospital_context", "diagnosis", "treatment"),
+            "patterns": (r"\b(dka|diabetic ketoacidosis|hhs|hyperosmolar|hyperglycemic crises|ketones|osmolality|bicarbonate)\b",),
+        },
+        "steroid_hospital_hyperglycemia": {
+            "label": "Glucocorticoid-associated inpatient hyperglycemia",
+            "aliases": ("住院類固醇高血糖", "glucocorticoid therapy", "NPH insulin"),
+            "facets": ("hospital_context", "steroid_context", "treatment"),
+            "patterns": (r"\b(glucocorticoid|steroid-induced hyperglycemia|corticosteroid|prednisone|dexamethasone|nph insulin)\b",),
+        },
+        "retinopathy": {
+            "label": "Diabetic retinopathy staging and treatment",
+            "aliases": ("視網膜病變", "NPDR", "PDR", "DME", "anti-VEGF"),
+            "facets": ("retinopathy_context",),
+            "patterns": (r"\b(retinopathy|npdr|pdr|macular edema|dme|anti-vegf|photocoagulation|vitrectomy)\b",),
+        },
+        "pad": {
+            "label": "Peripheral artery disease and lower-extremity complications",
+            "aliases": ("下肢動脈阻塞", "PAD", "claudication", "limb ischemia"),
+            "facets": ("pad_context", "ascvd_context"),
+            "patterns": (r"\b(peripheral artery disease|pad|lower-extremity|claudication|limb ischemia|abi|revascularization)\b",),
+        },
+        "masld_mash": {
+            "label": "MASLD/MASH and diabetes",
+            "aliases": ("脂肪肝", "MASLD", "MASH", "NAFLD", "NASH"),
+            "facets": ("liver_context",),
+            "patterns": (r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fibrosis)\b",),
+        },
+        "obesity_weight": {
+            "label": "Obesity and weight management in diabetes",
+            "aliases": ("肥胖", "體重管理", "weight management", "metabolic surgery"),
+            "facets": ("treatment",),
+            "patterns": (r"\b(obesity|overweight|weight management|metabolic surgery|anti-obesity)\b",),
+        },
+    }
+
+
+def compiled_concept_evidence_records(chunks: list[KnowledgeChunk]) -> dict[str, dict[str, list[KnowledgeChunk]]]:
+    specs = compiled_concept_specs()
+    records: dict[str, dict[str, list[KnowledgeChunk]]] = {concept: {} for concept in specs}
+    max_per_source = max(2, int(os.getenv("LINE_COMPILED_CONCEPT_MAX_EVIDENCE", "6")))
+
+    for chunk in chunks:
+        if chunk.chunk_type not in {"recommendation", "table_row", "section_summary", "text"}:
+            continue
+        source_key = compiled_source_key(chunk.source_label)
+        if source_key not in {"ADA", "AACE", "KDIGO"}:
+            continue
+        haystack = f"{chunk.source_label} {chunk.title} {chunk.section} {chunk.chunk_type} {' '.join(chunk.metadata)} {chunk.text} {chunk.parent_text[:900]}".lower()
+        facets = hit_facets_from_text(
+            chunk.source,
+            chunk.source_label,
+            chunk.title,
+            chunk.section,
+            chunk.chunk_type,
+            chunk.text,
+            chunk.parent_text,
+            chunk.metadata,
+        )
+        for concept, spec in specs.items():
+            if not compiled_chunk_matches_concept(haystack, facets, spec):
+                continue
+            bucket = records[concept].setdefault(source_key, [])
+            if len(bucket) >= max_per_source:
+                continue
+            bucket.append(chunk)
+    return {concept: sources for concept, sources in records.items() if any(sources.values())}
+
+
+def compiled_chunk_matches_concept(haystack: str, facets: set[str], spec: dict[str, object]) -> bool:
+    spec_facets = set(str(value) for value in spec.get("facets", ()) if str(value))
+    facet_match = bool(spec_facets and spec_facets.issubset(facets))
+    pattern_match = any(re.search(str(pattern), haystack, flags=re.I) for pattern in spec.get("patterns", ()))
+    return facet_match or pattern_match
+
+
+def compiled_source_key(source_label: str) -> str:
+    lower = source_label.lower()
+    if "ada" in lower or "american diabetes association" in lower:
+        return "ADA"
+    if "aace" in lower:
+        return "AACE"
+    if "kdigo" in lower:
+        return "KDIGO"
+    return "OTHER"
+
+
+def desired_compiled_concepts_for_query(query: str, query_lower: str | None = None) -> set[str]:
+    surface_query = query_surface_text(query)
+    lower = surface_query.lower()
+    concepts = query_concepts(surface_query, lower)
+    desired: set[str] = set()
+    if "ckd" in concepts or any(term in lower for term in ("ckd", "kidney", "renal", "egfr", "uacr", "albuminuria")):
+        desired.add("ckd_medication")
+    if "blood_pressure_target" in concepts:
+        desired.add("blood_pressure_target")
+    if "lipid_target" in concepts:
+        desired.add("lipid_target")
+    if "hyperglycemic_crisis" in concepts:
+        desired.add("hyperglycemic_crisis")
+    if "hospital_steroid_hyperglycemia" in concepts:
+        desired.add("steroid_hospital_hyperglycemia")
+    if "retinopathy" in concepts:
+        desired.add("retinopathy")
+    if "pad" in concepts:
+        desired.add("pad")
+    if "liver" in concepts or any(term in surface_query for term in ("肝", "脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
+        term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "fatty liver")
+    ):
+        desired.add("masld_mash")
+    if "technology" in concepts or any(term in lower for term in ("cgm", "continuous glucose", "time in range", "tir", "gmi")):
+        desired.add("cgm_metrics")
+    if any(term in surface_query for term in ("血糖控制", "血糖目標", "糖化血色素目標")) or any(
+        term in lower for term in ("glycemic goal", "glycemic target", "a1c goal", "glucose target")
+    ):
+        desired.add("glycemic_targets")
+    return desired
+
+
+def query_surface_text(query: str) -> str:
+    for marker in (" diabetes_guideline_question ", " guideline_grounded_answer ", " answer only if "):
+        if marker in query:
+            return query.split(marker, 1)[0].strip() or query
+    return query
+
+
+def compiled_concept_artifacts(records: dict[str, dict[str, list[KnowledgeChunk]]]) -> list[KnowledgeChunk]:
+    artifacts: list[KnowledgeChunk] = []
+    specs = compiled_concept_specs()
+    for concept, sources in records.items():
+        spec = specs.get(concept, {})
+        for source_key, evidence_chunks in sources.items():
+            if not evidence_chunks:
+                continue
+            evidence_chunks = sorted(evidence_chunks, key=compiled_evidence_priority, reverse=True)
+            source_label = evidence_chunks[0].source_label
+            artifact_text = compiled_concept_artifact_text(concept, spec, source_key, evidence_chunks)
+            parent_text = "\n\n".join(chunk.parent_text[:1800] for chunk in evidence_chunks[:3] if chunk.parent_text)
+            metadata = structured_metadata(
+                source_label,
+                f"Compiled concept: {spec.get('label', concept)}",
+                f"{source_key} concept artifact: {concept}",
+                "compiled_concept",
+                artifact_text,
+                parent_text,
+            )
+            metadata = tuple(
+                dedupe_terms(
+                    [
+                        *metadata,
+                        "compiled_artifact",
+                        "artifact_type:compiled_concept",
+                        f"clinical_concept:{concept}",
+                        f"concept_source:{source_key.lower()}",
+                        "raw_markdown_source_of_truth",
+                    ]
+                )
+            )
+            artifacts.append(
+                KnowledgeChunk(
+                    f"compiled-concept-{source_key.lower()}-{concept}",
+                    source_label,
+                    f"Compiled concept: {spec.get('label', concept)}",
+                    f"{source_key} concept artifact: {concept}",
+                    "compiled_concept",
+                    artifact_text,
+                    parent_text,
+                    metadata,
+                    chunk_tokens(source_label, f"Compiled concept: {spec.get('label', concept)}", f"{source_key} concept artifact: {concept}", "compiled_concept", artifact_text, metadata),
+                )
+            )
+    return artifacts
+
+
+def compiled_cross_guideline_artifacts(records: dict[str, dict[str, list[KnowledgeChunk]]]) -> list[KnowledgeChunk]:
+    artifacts: list[KnowledgeChunk] = []
+    specs = compiled_concept_specs()
+    for concept, sources in records.items():
+        present_sources = {source: chunks for source, chunks in sources.items() if chunks}
+        if len(present_sources) < 2:
+            continue
+        spec = specs.get(concept, {})
+        artifact_text = compiled_cross_guideline_artifact_text(concept, spec, present_sources)
+        parent_text = "\n\n".join(
+            chunk.parent_text[:1200]
+            for source_chunks in present_sources.values()
+            for chunk in sorted(source_chunks, key=compiled_evidence_priority, reverse=True)[:2]
+            if chunk.parent_text
+        )
+        metadata = structured_metadata(
+            "Compiled ADA/AACE/KDIGO guideline comparison",
+            f"Cross-guideline concept: {spec.get('label', concept)}",
+            f"Cross-guideline comparison: {concept}",
+            "compiled_cross_guideline",
+            artifact_text,
+            parent_text,
+        )
+        metadata = tuple(
+            dedupe_terms(
+                [
+                    *metadata,
+                    "compiled_artifact",
+                    "artifact_type:compiled_cross_guideline",
+                    f"clinical_concept:{concept}",
+                    "cross_guideline",
+                    "raw_markdown_source_of_truth",
+                ]
+            )
+        )
+        artifacts.append(
+            KnowledgeChunk(
+                f"compiled-cross-guideline-{concept}",
+                "Compiled ADA/AACE/KDIGO guideline comparison",
+                f"Cross-guideline concept: {spec.get('label', concept)}",
+                f"Cross-guideline comparison: {concept}",
+                "compiled_cross_guideline",
+                artifact_text,
+                parent_text,
+                metadata,
+                chunk_tokens("Compiled ADA/AACE/KDIGO guideline comparison", f"Cross-guideline concept: {spec.get('label', concept)}", f"Cross-guideline comparison: {concept}", "compiled_cross_guideline", artifact_text, metadata),
+            )
+        )
+    return artifacts
+
+
+def compiled_evidence_priority(chunk: KnowledgeChunk) -> int:
+    base = {"recommendation": 5, "table_row": 4, "section_summary": 3, "text": 2}.get(chunk.chunk_type, 1)
+    if any(tag.startswith("recommendation_grade:") for tag in chunk.metadata):
+        base += 2
+    if any(tag.startswith("recommendation_id:") for tag in chunk.metadata):
+        base += 1
+    return base
+
+
+def compiled_concept_artifact_text(
+    concept: str,
+    spec: dict[str, object],
+    source_key: str,
+    evidence_chunks: list[KnowledgeChunk],
+) -> str:
+    aliases = ", ".join(str(value) for value in spec.get("aliases", ()))
+    sections = dedupe_terms(f"{chunk.title} / {chunk.section}" for chunk in evidence_chunks[:8])
+    lines = [
+        "Compiled concept artifact",
+        f"Clinical concept: {concept}",
+        f"Concept label: {spec.get('label', concept)}",
+        f"Aliases and patient-language terms: {aliases or 'none'}",
+        f"Guideline source: {source_key}",
+        f"Related sections: {'; '.join(sections)}",
+        "Role: Use this as a concept landing page for retrieval. Verify final claims against the cited raw Markdown snippets and parent sections.",
+        "Representative evidence:",
+    ]
+    for index, chunk in enumerate(evidence_chunks[:8], start=1):
+        snippet = re.sub(r"\s+", " ", chunk.text).strip()[:620]
+        lines.append(f"{index}. [{chunk.source_label} | {chunk.section} | {chunk.chunk_type} | {chunk.source}] {snippet}")
+    return "\n".join(lines)
+
+
+def compiled_cross_guideline_artifact_text(
+    concept: str,
+    spec: dict[str, object],
+    present_sources: dict[str, list[KnowledgeChunk]],
+) -> str:
+    aliases = ", ".join(str(value) for value in spec.get("aliases", ()))
+    lines = [
+        "Compiled cross-guideline artifact",
+        f"Clinical concept: {concept}",
+        f"Concept label: {spec.get('label', concept)}",
+        f"Aliases and patient-language terms: {aliases or 'none'}",
+        f"Guidelines with retrieved evidence: {', '.join(sorted(present_sources))}",
+        "Role: Use this to route cross-guideline questions and detect where ADA/AACE/KDIGO each have relevant evidence. It does not resolve conflicts by itself.",
+    ]
+    for source_key in sorted(present_sources):
+        lines.append(f"{source_key} evidence pointers:")
+        for chunk in sorted(present_sources[source_key], key=compiled_evidence_priority, reverse=True)[:4]:
+            snippet = re.sub(r"\s+", " ", chunk.text).strip()[:460]
+            lines.append(f"- [{chunk.source_label} | {chunk.section} | {chunk.chunk_type} | {chunk.source}] {snippet}")
+    return "\n".join(lines)
 
 
 def compiled_artifact_text(chunk: KnowledgeChunk, artifact_type: str) -> str:
@@ -1976,6 +2303,7 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
 
 def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
     concepts = query_concepts(query, query_lower)
+    desired_compiled_concepts = desired_compiled_concepts_for_query(query, query_lower)
     variants: list[QueryVariant] = []
     if "retinopathy" in concepts:
         base = (
@@ -2262,6 +2590,10 @@ def clinical_search_brain_plan(query: str) -> dict[str, list[str]]:
 def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
     lower = query_lower if query_lower is not None else query.lower()
     concepts: set[str] = set()
+    if any(term in query for term in ("肝", "脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
+        term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "fatty liver")
+    ):
+        concepts.add("liver")
     if any(term in query for term in ("視網膜", "眼底", "黃斑")) or any(
         term in lower for term in ("retinopathy", "retinal", "macular edema", "dme", "npdr", "pdr")
     ):
@@ -2459,6 +2791,7 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
     else:
         sorted_hits = source_balanced_hits(ranked_hits, max(limit * 3, limit))
     target_facets = required_facets(query)
+    desired_compiled_concepts = desired_compiled_concepts_for_query(query, query.lower())
     selected: list[KnowledgeHit] = []
     covered: set[str] = set()
     remaining = sorted_hits[: max(limit * 5, limit + 20)]
@@ -2469,6 +2802,7 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
         best_value = -1.0
         for index, hit in enumerate(remaining):
             facets = hit_facets(hit)
+            hit_haystack = f"{hit.source_label} {hit.section} {hit.chunk_type} {' '.join(hit.metadata)} {hit.excerpt}".lower()
             new_target_facets = (facets & target_facets) - covered
             new_general_facets = facets - covered
             score_component = hit.score / max_score
@@ -2486,6 +2820,20 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
                 redundancy_penalty += 0.45
             if target_facets:
                 redundancy_penalty += 0.12 * len(target_facets - facets)
+            if hit.chunk_type in {"compiled_concept", "compiled_cross_guideline"} and desired_compiled_concepts:
+                metadata_text = " ".join(hit.metadata).lower()
+                if not any(f"clinical_concept:{concept}" in metadata_text for concept in desired_compiled_concepts):
+                    redundancy_penalty += 1.25
+            if "blood_pressure_target" in desired_compiled_concepts:
+                if "treatment goals" in hit_haystack:
+                    coverage_bonus += 0.55
+                if ("pad_context" in facets or "pharmacologic interventions" in hit_haystack) and "treatment goals" not in hit_haystack:
+                    redundancy_penalty += 0.75
+            if "ckd_medication" in desired_compiled_concepts and re.search(r"\b(cgm|continuous glucose monitoring|time in range|tir)\b", hit_haystack) and not re.search(
+                r"\b(egfr|albuminuria|uacr|sglt2|glp-1|finerenone|nsmra)\b",
+                hit_haystack,
+            ):
+                redundancy_penalty += 0.75
             if "hypoglycemia" in target_facets and "hypoglycemia" not in facets:
                 redundancy_penalty += 0.35
             if "foot_care" in target_facets and "foot_care" not in facets:
@@ -2825,7 +3173,7 @@ def best_sentence_excerpt(text: str, query_tokens: list[str], max_chars: int) ->
 
 
 def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
-    haystack = f"{chunk.source} {chunk.source_label} {chunk.title} {chunk.section} {chunk.text[:700]}".lower()
+    haystack = f"{chunk.source} {chunk.source_label} {chunk.title} {chunk.section} {' '.join(chunk.metadata)} {chunk.text[:700]}".lower()
     query_lower = query.lower()
     adjustment = 1.0
     glycemic_goal_query = any(term in query for term in ("血糖控制", "控制目標", "血糖目標", "目標")) or any(
@@ -2858,6 +3206,7 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         term in query_lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
     )
     concepts = query_concepts(query, query_lower)
+    desired_compiled_concepts = desired_compiled_concepts_for_query(query, query_lower)
     retinopathy_query = "retinopathy" in concepts
     pad_query = "pad" in concepts
     staging_query = "staging" in concepts
@@ -2885,8 +3234,19 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 1.65
     if chunk.chunk_type == "compiled_table_fact":
         adjustment *= 1.5
+    if chunk.chunk_type == "compiled_concept":
+        adjustment *= 1.32
+    if chunk.chunk_type == "compiled_cross_guideline":
+        adjustment *= 1.22
     if chunk.chunk_type == "compiled_section_map":
         adjustment *= 0.58
+    if chunk.chunk_type in {"compiled_concept", "compiled_cross_guideline"} and desired_compiled_concepts:
+        matched_compiled_concept = any(f"clinical_concept:{concept}" in haystack for concept in desired_compiled_concepts)
+        adjustment *= 8.0 if matched_compiled_concept else 0.0001
+    if not re.search(r"\b(abbreviation|acronym|glossary)\b", query_lower) and re.search(
+        r"\b(abbreviations and acronyms|glossary)\b", haystack,
+    ):
+        adjustment *= 0.05
     if re.search(r"\b(reference|references|acknowledg|appendix)\b", haystack):
         adjustment *= 0.35
     if not vaccination_query and re.search(
@@ -2934,6 +3294,8 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 3.0
     if blood_pressure_target_query and "pharmacologic interventions" in haystack:
         adjustment *= 0.55
+    if blood_pressure_target_query and re.search(r"\b(exercise|physical activity|pre-exercise)\b", haystack) and "treatment goals" not in haystack:
+        adjustment *= 0.05
     if blood_pressure_target_query and re.search(
         r"\b(treatment goals|blood pressure goal|blood pressure goals|blood pressure target|on-treatment blood pressure goal|systolic blood pressure goal|hypertension|<130/80|<120|mmhg|10\.3|10\.4|shared decision-making|cardiovascular or kidney risk)\b",
         haystack,
@@ -2964,10 +3326,22 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= float(os.getenv("LINE_KNOWLEDGE_KDIGO_CKD_MEDICATION_BOOST", "1.35"))
     if kidney_medication_query and "aace" in haystack:
         adjustment *= float(os.getenv("LINE_KNOWLEDGE_AACE_MEDICATION_BOOST", "1.25"))
+    if kidney_medication_query and not re.search(r"\b(cgm|continuous glucose|time in range|tir)\b", query_lower) and re.search(
+        r"\b(cgm|continuous glucose monitoring|time in range|tir|glucose monitoring terms)\b",
+        haystack,
+    ):
+        adjustment *= 0.05
     if liver_query and re.search(r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fibrosis|hepatic)\b", haystack):
         adjustment *= 2.4
     if liver_query and re.search(r"\b(glp-1|pioglitazone|tirzepatide|weight loss|obesity|lifestyle)\b", haystack):
         adjustment *= 1.45
+    if liver_query and "older adults" in haystack and not re.search(
+        r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fibrosis|hepatic)\b",
+        haystack,
+    ):
+        adjustment *= 0.12
+    if kidney_query and not liver_query and re.search(r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fibrosis|hepatic)\b", haystack):
+        adjustment *= 0.25
     if technology_indication_query and ("dc26s007" in haystack or "diabetes technology" in haystack):
         adjustment *= 3.2
     if technology_indication_query and re.search(

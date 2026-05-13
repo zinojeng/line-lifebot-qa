@@ -88,6 +88,14 @@ Do not replace guideline Markdown. The raw Markdown remains the source of truth.
 
 Create artifacts at ingestion time:
 
+Current `line-lifebot-qa` implementation creates these chunk types:
+
+- `compiled_recommendation`
+- `compiled_table_fact`
+- `compiled_section_map`
+- `compiled_concept`
+- `compiled_cross_guideline`
+
 ### 1. Chapter Artifact
 
 Fields:
@@ -164,6 +172,8 @@ Fields:
 - difference
 - datedness/version caution
 - source citations
+
+Implemented as `compiled_cross_guideline`: it is a routing and evidence-pointer card, not a conflict resolver. Final clinical synthesis still needs the raw Markdown snippets and parent sections.
 
 ## KnowQL-Like Query Contract
 

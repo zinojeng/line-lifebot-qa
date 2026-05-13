@@ -159,7 +159,7 @@ avoid_routes:
 目前版本：
 
 ```text
-2026-05-14-compiled-guideline-artifacts-v28
+2026-05-14-concept-cross-guideline-artifacts-v29
 ```
 
 相關 feature flag：
