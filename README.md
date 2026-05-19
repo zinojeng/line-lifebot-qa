@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-debug-retrieval-trace-v33
+APP_VERSION=2026-05-20-wiki-writeback-smoke-v34
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -52,6 +52,9 @@ LINE_DEBUG_SEARCH_MAX_HITS=12
 # Optional: if set, /debug/search requires x-debug-token header.
 LINE_DEBUG_TOKEN=
 LINE_RETRIEVAL_QUERY_MAX_CHARS=1400
+LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED=1
+LINE_QUERY_CANDIDATE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-candidates
+LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS=1200
 LINE_TIMEOUT=12
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
@@ -85,7 +88,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-debug-retrieval-trace-v33
+APP_VERSION=2026-05-20-wiki-writeback-smoke-v34
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -119,6 +122,8 @@ LINE_HEALTH_FAST_ENABLED=1
 LINE_HEALTH_STATUS_CACHE_SECONDS=30
 LINE_WHOLE_SECTION_CONTEXT_ENABLED=0
 LINE_DEBUG_SEARCH_ENABLED=1
+LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED=1
+LINE_QUERY_CANDIDATE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-candidates
 ```
 
 The same minimal set is also saved in `zeabur.env.example`.
@@ -425,6 +430,16 @@ curl -X POST https://linebotqa.zeabur.app/debug/knowledge/reload
 
 If `LINE_DEBUG_TOKEN` is set, pass it as `x-debug-token`.
 
+Run the retrieval smoke suite after wiki or retrieval changes:
+
+```bash
+python3 scripts/retrieval_smoke_tests.py --base-url https://linebotqa.zeabur.app
+```
+
+For high-value guideline questions, the app can save a review-only Markdown
+candidate under `inbox/query-candidates/` without LINE user IDs. Keep this as a
+staging area; promote to `queries/` only after human review.
+
 The response includes the retrieval query, query variants, required facets,
 candidate hits, selected hits, recursive coverage notes, whole-section context
 notes, and missing facets. If `LINE_DEBUG_TOKEN` is set, include it as the
@@ -566,7 +581,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-20-debug-retrieval-trace-v33",
+  "app_version": "2026-05-20-wiki-writeback-smoke-v34",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {

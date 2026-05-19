@@ -1651,11 +1651,19 @@ def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not match:
         return {}, text
     fields: dict[str, str] = {}
+    current_key = ""
     for line in match.group(1).splitlines():
+        stripped = line.strip()
+        if current_key and stripped.startswith("- "):
+            item = stripped[2:].strip().strip("'\"")
+            if item:
+                fields[current_key] = ", ".join(part for part in [fields.get(current_key, ""), item] if part)
+            continue
         if ":" not in line or line.startswith(" "):
             continue
         key, value = line.split(":", 1)
-        fields[key.strip()] = value.strip().strip("'\"")
+        current_key = key.strip()
+        fields[current_key] = value.strip().strip("'\"")
     return fields, match.group(2)
 
 
@@ -1672,6 +1680,8 @@ def llm_wiki_chunks_from_page(
     confidence = clean_cell_text(frontmatter.get("confidence") or "")
     status = clean_cell_text(frontmatter.get("status") or "")
     tags = clean_cell_text(frontmatter.get("tags") or "")
+    aliases = clean_cell_text(frontmatter.get("aliases") or "")
+    entities = clean_cell_text(frontmatter.get("entities") or "")
     clinical_use = clean_cell_text(frontmatter.get("clinical_use") or "")
     source_label = f"LLM Wiki {wiki_category}: {title}"
     source = f"{wiki_name}/{relative_path}"
@@ -1697,6 +1707,8 @@ def llm_wiki_chunks_from_page(
                     f"status:{status}" if status else "",
                     f"clinical_use:{clinical_use}" if clinical_use else "",
                     *frontmatter_list_values(tags, "tag"),
+                    *frontmatter_list_values(aliases, "alias"),
+                    *frontmatter_list_values(entities, "entity"),
                 ]
             )
         )
@@ -1710,6 +1722,8 @@ def llm_wiki_chunks_from_page(
                 f"Evidence level: {evidence_level or 'not specified'}",
                 f"Confidence: {confidence or 'not specified'}",
                 f"Status: {status or 'not specified'}",
+                f"Aliases: {aliases}" if aliases else "",
+                f"Entities: {entities}" if entities else "",
                 "Role: Use this as first-line compiled knowledge. Verify exact clinical thresholds against raw guideline Markdown when needed.",
                 "",
                 compact,

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import concurrent.futures
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 import hashlib
 import hmac
@@ -99,7 +100,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-debug-retrieval-trace-v33")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-wiki-writeback-smoke-v34")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -184,6 +185,17 @@ LINE_CONTEXT_ENABLED = os.getenv("LINE_CONTEXT_ENABLED", "1").strip().lower() no
 LINE_CONTEXT_MAX_MESSAGES = int(os.getenv("LINE_CONTEXT_MAX_MESSAGES", "8"))
 LINE_CONTEXT_TTL_SECONDS = int(os.getenv("LINE_CONTEXT_TTL_SECONDS", "43200"))
 LINE_SESSION_SCOPE = os.getenv("LINE_SESSION_SCOPE", "user").strip().lower()
+LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED = os.getenv("LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_QUERY_CANDIDATE_DIR = os.getenv(
+    "LINE_QUERY_CANDIDATE_DIR",
+    "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-candidates",
+)
+LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS = int(os.getenv("LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS", "1200"))
 
 app = FastAPI(title="LifeBot Fast LINE QA")
 
@@ -750,6 +762,129 @@ def answer_for_session(session_key: str, user_text: str) -> str:
         if not is_context_reset_command(user_text):
             save_conversation_turn(session_key, user_text, answer)
         return answer
+
+
+def query_candidate_slug(text: str) -> str:
+    ascii_words = re.findall(r"[A-Za-z0-9]+", text.lower())
+    if ascii_words:
+        slug = "-".join(ascii_words[:8])
+    else:
+        zh_terms = re.findall(r"[\u4e00-\u9fff]{1,8}", text)
+        slug = "-".join(zh_terms[:6])
+    slug = re.sub(r"[^a-z0-9\u4e00-\u9fff-]+", "-", slug).strip("-")
+    return slug[:72] or "line-guideline-query"
+
+
+def redacted_query_candidate_text(text: str) -> str:
+    text = re.sub(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[email-redacted]", text, flags=re.I)
+    text = re.sub(r"\b09\d{2}[- ]?\d{3}[- ]?\d{3}\b", "[phone-redacted]", text)
+    text = re.sub(r"\b[A-Z][12]\d{8}\b", "[id-redacted]", text, flags=re.I)
+    return text.strip()
+
+
+def query_candidate_allowed(user_text: str, answer: str, clinical_intent: dict[str, Any] | None) -> bool:
+    if not LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED:
+        return False
+    if not user_text.strip() or not answer.strip():
+        return False
+    if knowledge_no_answer_text()[:20] in answer:
+        return False
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|09\d{2}[- ]?\d{3}[- ]?\d{3}|[A-Z][12]\d{8}", user_text, flags=re.I):
+        return False
+    concepts = " ".join(str(item) for item in (clinical_intent or {}).get("concepts", []))
+    haystack = f"{user_text} {concepts}".lower()
+    return bool(
+        re.search(
+            r"ada|kdigo|ckd|egfr|uacr|albuminuria|dialysis|sglt2|glp|cgm|aid|a1c|hypogly|finerenone|metformin|"
+            r"糖尿病|腎|洗腎|透析|尿蛋白|白蛋白尿|排糖藥|連續血糖|血糖機|低血糖|指引",
+            haystack,
+        )
+    )
+
+
+def write_query_candidate(
+    user_text: str,
+    answer: str,
+    clinical_intent: dict[str, Any] | None,
+    selected_hits: list[KnowledgeHit],
+    retrieval_trace: dict[str, Any],
+) -> None:
+    if not query_candidate_allowed(user_text, answer, clinical_intent):
+        return
+    try:
+        candidate_dir = Path(LINE_QUERY_CANDIDATE_DIR)
+        candidate_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        question = redacted_query_candidate_text(user_text)
+        digest = hashlib.sha1(question.encode("utf-8", errors="ignore")).hexdigest()[:10]
+        filename = f"{now.date().isoformat()}-{query_candidate_slug(question)}-{digest}.md"
+        path = candidate_dir / filename
+        if path.exists():
+            return
+        hit_lines = []
+        for hit in selected_hits[:6]:
+            hit_lines.append(
+                f"- {getattr(hit, 'chunk_type', '')}: {getattr(hit, 'source_label', '')} / {getattr(hit, 'section', '')}"
+            )
+        intent = clinical_intent or {}
+        content = "\n".join(
+            [
+                "---",
+                f"title: LINE Query Candidate - {digest}",
+                f"created: {now.isoformat()}",
+                f"updated: {now.isoformat()}",
+                "type: query-candidate",
+                "tags: [line, query-candidate, guideline-qa]",
+                "sources:",
+                *[f"  - {line[2:]}" for line in hit_lines[:3]],
+                "evidence_level: local-practice",
+                "clinical_use: workflow",
+                "confidence: uncertain",
+                f"last_verified: {now.date().isoformat()}",
+                "status: open",
+                "obsidian_type: registry",
+                "owner_agent: line-lifebot-qa",
+                "write_policy: review-before-canonical",
+                "---",
+                "",
+                "# LINE Query Candidate",
+                "",
+                "## Question",
+                "",
+                question,
+                "",
+                "## Retrieval",
+                "",
+                f"- retrieval_mode: {retrieval_trace.get('retrieval_mode', '')}",
+                f"- retrieval_elapsed_ms: {retrieval_trace.get('elapsed_ms', '')}",
+                f"- fast_hit_count: {retrieval_trace.get('fast_hit_count', '')}",
+                f"- fallback_reason: {retrieval_trace.get('fallback_reason', '')}",
+                "",
+                "## Clinical Intent",
+                "",
+                f"- clinical_intent: {intent.get('clinical_intent', '')}",
+                f"- question_type: {intent.get('question_type', '')}",
+                f"- required_facets: {', '.join(str(x) for x in intent.get('required_facets', []))}",
+                "",
+                "## Selected Evidence",
+                "",
+                *(hit_lines or ["- No selected hits recorded."]),
+                "",
+                "## Answer Excerpt",
+                "",
+                redacted_query_candidate_text(answer)[:LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS],
+                "",
+                "## Review Decision",
+                "",
+                "- [ ] Promote to `queries/`",
+                "- [ ] Update existing concept/drug/comparison page",
+                "- [ ] Discard as one-off",
+            ]
+        )
+        path.write_text(content + "\n", encoding="utf-8")
+        print(f"query candidate saved: {path}")
+    except Exception as exc:
+        print(f"query candidate writeback failed: {type(exc).__name__}: {exc}")
 
 
 def extract_gemini_text(payload: dict[str, Any]) -> str:
@@ -1825,7 +1960,8 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
     if not guideline_scope_question(user_text, clinical_intent):
         return guideline_scope_no_answer_text()
     retrieval_query = build_retrieval_query(api_key, user_text, recent_context, clinical_intent)
-    candidates = search_knowledge_candidates(retrieval_query)
+    retrieval_trace = search_knowledge_candidates_with_trace(retrieval_query)
+    candidates = list(retrieval_trace.get("hits", []))
     if not candidates:
         return knowledge_no_answer_text()
 
@@ -1904,7 +2040,9 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             timeout=GEMINI_TIMEOUT,
         )
         if answer:
-            return remove_trailing_question(answer)[:4900]
+            final_answer = remove_trailing_question(answer)[:4900]
+            write_query_candidate(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
+            return final_answer
         return "目前系統暫時沒有產生完整回覆。若你有明顯不舒服或血糖異常，請先聯絡醫療團隊。"
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:200]
