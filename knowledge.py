@@ -2031,21 +2031,22 @@ def knowledge_prompt_from_hits(hits: list[KnowledgeHit]) -> str:
     if not hits:
         if knowledge_strict_enabled():
             return (
-                "\n\n背景知識檢索：沒有找到足夠相關的糖尿病指南片段。"
+                "\n\n背景知識檢索：沒有找到足夠相關的糖尿病指南或知識庫內容。"
                 "\n嚴格回答規則：請不要使用模型內建知識、一般醫學常識或推測補完；"
                 f"請只回覆這段文字：{knowledge_no_answer_text()}"
             )
         return (
-            "\n\n背景知識檢索：沒有找到足夠相關的糖尿病指南片段。"
+            "\n\n背景知識檢索：沒有找到足夠相關的糖尿病指南或知識庫內容。"
             "\n回答時請只給一般衛教原則，並說明需要醫療團隊依個人狀況判斷。"
         )
 
     lines = [
-        "\n\n背景知識檢索：以下為本次問題相關的已載入臨床指南片段。",
-        "嚴格回答規則：只能根據以下片段回答；不要使用模型內建知識、一般醫學常識或推測補完。",
-        "若以下片段不足以直接回答使用者問題，請明確說指南片段不足，並停止回答，不要改用其他來源補充。",
-        "回答方式：先用 1 句話直接回答，再用 2 到 4 個重點整理指南片段支持的內容；若有藥物限制或 eGFR 門檻，請清楚列出，但不要提供個人化劑量。",
-        "來源標示：回答中請自然標示依據來源，例如「根據 ADA 2026 / KDIGO / AACE 片段」；不要編造未出現在片段中的來源。",
+        "\n\n背景知識檢索：以下為本次問題相關的已載入臨床指南與知識庫內容。",
+        "嚴格回答規則：只能根據以下內容回答；不要使用模型內建知識、一般醫學常識或推測補完。",
+        "若以下內容不足以直接回答使用者問題，請明確說目前已載入指南內容不足，並停止回答，不要改用其他來源補充。",
+        "回答方式：先用 1 句話直接回答，再用 2 到 4 個重點整理已載入內容支持的重點；若有藥物限制或 eGFR 門檻，請清楚列出，但不要提供個人化劑量。",
+        "來源標示：回答中請自然標示依據來源，例如「根據 ADA 2026 / KDIGO / AACE」；不要編造未出現在已載入內容中的來源。",
+        "使用者可見措辭：不要使用內部檢索用語；請改說「根據目前已載入的指南內容」或「知識庫整理」。",
     ]
     for index, hit in enumerate(hits, start=1):
         metadata_line = ", ".join(hit.metadata[:18])
@@ -2054,9 +2055,9 @@ def knowledge_prompt_from_hits(hits: list[KnowledgeHit]) -> str:
                 f"\n[{index}] {public_metadata(hit.title)}",
                 f"來源指南：{hit.source_label}",
                 f"章節：{public_metadata(hit.section)}",
-                f"片段類型：{hit.chunk_type}",
+                f"內容類型：{hit.chunk_type}",
                 f"結構化標籤：{metadata_line or '無'}",
-                f"片段：{hit.excerpt}",
+                f"內容摘要：{hit.excerpt}",
             ]
         )
         if hit.parent_excerpt and hit.parent_excerpt != hit.excerpt:
@@ -2066,9 +2067,9 @@ def knowledge_prompt_from_hits(hits: list[KnowledgeHit]) -> str:
 
 def knowledge_candidates_prompt(hits: list[KnowledgeHit]) -> str:
     if not hits:
-        return "\n\n候選指南片段：無。"
+        return "\n\n候選指南內容：無。"
     lines = [
-        "\n\n候選指南片段：以下為初步召回的候選片段，請只用來做 rerank/coverage，不可用模型內建知識補充。",
+        "\n\n候選指南內容：以下為初步召回的候選內容，請只用來做 rerank/coverage，不可用模型內建知識補充。",
     ]
     for index, hit in enumerate(hits, start=1):
         metadata_line = ", ".join(hit.metadata[:18])
@@ -2077,10 +2078,10 @@ def knowledge_candidates_prompt(hits: list[KnowledgeHit]) -> str:
                 f"\n[{index}] {public_metadata(hit.title)}",
                 f"來源指南：{hit.source_label}",
                 f"章節：{public_metadata(hit.section)}",
-                f"片段類型：{hit.chunk_type}",
+                f"內容類型：{hit.chunk_type}",
                 f"結構化標籤：{metadata_line or '無'}",
                 f"召回分數：{hit.score:.2f}",
-                f"片段：{hit.excerpt}",
+                f"內容摘要：{hit.excerpt}",
             ]
         )
         if hit.parent_excerpt and hit.parent_excerpt != hit.excerpt:
@@ -2907,6 +2908,32 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
         "required_facets": ["liver_context", "treatment"],
         "search_queries": [
             "MASLD MASH NAFLD NASH steatotic liver disease diabetes obesity fibrosis cirrhosis GLP-1 receptor agonist tirzepatide pioglitazone weight loss"
+        ],
+    },
+    "bone_health": {
+        "concepts": ["osteoporosis", "bone health", "fracture risk", "BMD", "DXA", "T-score", "FRAX"],
+        "target_chapters": ["ADA S4 Comprehensive Medical Evaluation and Assessment of Comorbidities"],
+        "evidence_targets": [
+            "ADA 2026 bone health recommendations 4.8 through 4.13b",
+            "fracture risk assessment in older adults with diabetes",
+            "DXA or BMD monitoring every 2 to 3 years when criteria are met",
+            "T-score <= -2.5 or fragility fracture or elevated FRAX as treatment triggers",
+            "T-score between -2.0 and -2.5 with additional fracture risk factors may justify treatment consideration",
+            "FRAX and BMD may underestimate fracture risk in type 2 diabetes",
+            "avoid or use caution with TZD and sulfonylurea in fracture-prone patients",
+            "individualize glycemic targets and prefer low-hypoglycemia-risk regimens to reduce falls",
+            "calcium 1000 to 1200 mg/day and vitamin D adequacy for fracture-risk patients",
+            "osteoporosis medication classes generally follow general-population options when treatment is needed",
+        ],
+        "avoid_routes": [
+            "do not answer diabetes osteoporosis as no evidence if ADA 2026 Section 4 bone health content is retrieved",
+            "do not answer only from retinopathy, foot care, PAD, or CKD content",
+            "do not claim FRAX/T-score/DXA guidance is absent when those terms appear in retrieved evidence",
+        ],
+        "required_facets": ["bone_health", "fracture_risk", "treatment"],
+        "search_queries": [
+            "ADA section 4 dc26s004 bone health osteoporosis fracture risk DXA BMD T-score FRAX Recommendation 4.8 4.9 4.10 4.11 4.12 4.13a 4.13b diabetes",
+            "diabetes osteoporosis treatment different general population T-score -2.5 -2.0 FRAX fragility fracture thiazolidinediones sulfonylureas hypoglycemia falls calcium vitamin D",
         ],
     },
     "hyperglycemic_crisis": {
