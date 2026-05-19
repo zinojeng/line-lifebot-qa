@@ -3296,6 +3296,8 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
 
 def preferred_source_from_query(query: str) -> str:
     lower = query.lower()
+    if "bone_health" in query_concepts(query, lower):
+        return "ada"
     if "blood_pressure_target" in query_concepts(query, lower):
         return "ada"
     if "kdigo" in lower:
@@ -3710,6 +3712,20 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 6.0
     if bone_health_query and ("dc26s004" in haystack or "section 4" in haystack or "comprehensive medical evaluation" in haystack):
         adjustment *= 2.2
+    if bone_health_query and "diabetes-bone-health-osteoporosis" in haystack:
+        adjustment *= 600.0
+    if bone_health_query and re.search(r"\b(compiled concept: bone health|clinical_concept:bone_health|ada concept artifact: bone_health)\b", haystack):
+        adjustment *= 80.0
+    if bone_health_query and not re.search(
+        r"\b(osteoporosis|bone health|fracture risk|fragility fracture|bone mineral density|bmd|dxa|t-score|frax|calcium|vitamin d|bisphosphonate|denosumab|romosozumab|clinical_concept:bone_health)\b|骨質疏鬆|骨鬆|骨折|骨密度|骨骼",
+        haystack,
+    ):
+        adjustment *= 0.015
+    if bone_health_query and re.search(r"\b(retinopathy|macular edema|foot care|peripheral artery disease|pad|chronic kidney disease|ckd|albuminuria|uacr)\b", haystack) and not re.search(
+        r"\b(osteoporosis|bone health|fracture|bmd|dxa|t-score|frax|clinical_concept:bone_health)\b|骨質疏鬆|骨折|骨密度",
+        haystack,
+    ):
+        adjustment *= 0.02
     if not vaccination_query and re.search(
         r"\b(vaccin|immunization|influenza|pneumococcal|covid|hepatitis b|respiratory syncytial virus|rsv)\b",
         haystack,
