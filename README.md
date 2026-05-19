@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-14-concept-cross-guideline-artifacts-v29
+APP_VERSION=2026-05-19-llm-wiki-first-v30
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -34,6 +34,11 @@ LINE_COMPILED_KNOWLEDGE_ENABLED=1
 LINE_COMPILED_ARTIFACT_MAX_PER_SECTION=12
 LINE_COMPILED_CONCEPT_MAX_EVIDENCE=6
 LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
+LINE_LLM_WIKI_ENABLED=1
+LINE_LLM_WIKI_FIRST_ENABLED=1
+LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
+LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
 LINE_WHOLE_SECTION_CONTEXT_ENABLED=1
 LINE_WHOLE_SECTION_CONTEXT_MAX_SECTIONS=2
 LINE_WHOLE_SECTION_CONTEXT_CHARS=9000
@@ -75,7 +80,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-14-concept-cross-guideline-artifacts-v29
+APP_VERSION=2026-05-19-llm-wiki-first-v30
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -97,6 +102,11 @@ LINE_COMPILED_KNOWLEDGE_ENABLED=1
 LINE_COMPILED_ARTIFACT_MAX_PER_SECTION=12
 LINE_COMPILED_CONCEPT_MAX_EVIDENCE=6
 LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
+LINE_LLM_WIKI_ENABLED=1
+LINE_LLM_WIKI_FIRST_ENABLED=1
+LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
+LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
 LINE_WHOLE_SECTION_CONTEXT_ENABLED=1
 LINE_DEBUG_SEARCH_ENABLED=1
 ```
@@ -110,10 +120,11 @@ available as an optional provider by setting `LLM_PROVIDER=deepseek`,
 
 ## Background Knowledge
 
-The webhook loads all mounted guideline Markdown files from `LINE_KNOWLEDGE_DIRS`
-or `LINE_KNOWLEDGE_DIR`, then performs local file-based retrieval before each
-LLM answer. This is meant for LINE DM patient-education grounding, not for
-long-term user memory.
+The webhook now uses an LLM Wiki-first knowledge layer. It loads curated wiki
+pages from `LINE_LLM_WIKI_DIRS` first, then falls back to mounted raw guideline
+Markdown files from `LINE_KNOWLEDGE_DIRS` or `LINE_KNOWLEDGE_DIR` when exact
+thresholds, recommendations, or missing details need verification. This is meant
+for LINE DM patient-education grounding, not for long-term user memory.
 
 Default source inside Zeabur/container:
 
@@ -127,6 +138,16 @@ Default source inside Zeabur/container:
 /app/data/kdigoguidelines
 /app/data/aaceguidelines
 ```
+
+Recommended LLM Wiki mount inside Zeabur/container:
+
+```text
+/app/data/wiki/ada-kdigo-diabetes-wiki
+```
+
+Keep the wiki in Markdown so Obsidian can inspect backlinks, graph view,
+duplicate concepts, and hand-edited guideline notes. The raw guideline folders
+remain the fallback evidence layer.
 
 Useful settings:
 
@@ -146,10 +167,17 @@ LINE_KNOWLEDGE_CANDIDATE_SNIPPETS=15
 LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS=700
 LINE_KNOWLEDGE_MAX_SNIPPETS=5
 LINE_KNOWLEDGE_EXCERPT_CHARS=900
+LINE_LLM_WIKI_ENABLED=1
+LINE_LLM_WIKI_FIRST_ENABLED=1
+LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
+LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
 ```
 
 Health check includes `knowledge.available`, `knowledge.files`, and
-`knowledge.chunks` so deployment can verify the files are mounted correctly.
+`knowledge.chunks`, plus `knowledge.llm_wiki_files` and
+`knowledge.llm_wiki_existing_dirs`, so deployment can verify the wiki and raw
+guideline files are mounted correctly.
 For production, make sure you have permission to use the guideline files in this
 kind of application and mount/copy them into the deployed service path.
 
@@ -164,13 +192,17 @@ have permission to redistribute them. Recommended deployment:
    `/app/data/ada`, `/app/data/aace`, and `/app/data/kdigo`. Legacy folders
    `/app/data/adaguidelines`, `/app/data/aaceguidelines`, and
    `/app/data/kdigoguidelines` are still scanned.
-4. Set:
+4. Put the curated LLM Wiki at `/app/data/wiki/ada-kdigo-diabetes-wiki`.
+5. Set:
 
 ```bash
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
 LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/aace,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines
 LINE_KNOWLEDGE_EXTRA_PATHS=0
+LINE_LLM_WIKI_ENABLED=1
+LINE_LLM_WIKI_FIRST_ENABLED=1
+LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
 ```
 
 After redeploy, `GET /` should show:
@@ -186,7 +218,8 @@ After redeploy, `GET /` should show:
     "ADA Standards of Care in Diabetes 2026",
     "KDIGO 2024 Clinical Practice Guideline for CKD",
     "AACE 2026 Consensus Statement: Algorithm for Management of Adults With T2D"
-  ]
+  ],
+  "llm_wiki_files": 20
 }
 ```
 
@@ -483,7 +516,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-14-concept-cross-guideline-artifacts-v29",
+  "app_version": "2026-05-19-llm-wiki-first-v30",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -525,6 +558,9 @@ The health check should include:
     "whole_section_context": true,
     "local_hashed_vector_index": true,
     "inverted_index_retrieval": true,
+    "compiled_guideline_artifacts": true,
+    "llm_wiki_first": true,
+    "llm_wiki_files": 20,
     "long_context_verification": true,
     "debug_search_endpoint": true,
     "guideline_strict_grounding_current": true,

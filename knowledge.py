@@ -21,6 +21,7 @@ DEFAULT_KNOWLEDGE_DIRS = (
     "/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines"
 )
 DEFAULT_EXTRA_KNOWLEDGE_PATHS = ""
+DEFAULT_LLM_WIKI_DIRS = "/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki"
 DEFAULT_KEYWORD_DIR = Path(__file__).resolve().parent / "keywords"
 GEMINI_EMBEDDING_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -382,6 +383,9 @@ class KnowledgeBase:
         self.compiled_artifact_count = len(compiled_artifacts)
         if compiled_artifacts and compiled_knowledge_enabled():
             chunks = [*compiled_artifacts, *chunks]
+        llm_wiki_artifacts = llm_wiki_artifacts_from_dirs()
+        if llm_wiki_artifacts:
+            chunks = [*llm_wiki_artifacts, *chunks]
         self.source_files = source_files
         self.chunks = chunks
         self.vector_index = [hashed_vector(chunk.tokens) for chunk in chunks]
@@ -714,6 +718,46 @@ def compiled_cross_guideline_enabled() -> bool:
     }
 
 
+def llm_wiki_enabled() -> bool:
+    return os.getenv("LINE_LLM_WIKI_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def llm_wiki_first_enabled() -> bool:
+    return os.getenv("LINE_LLM_WIKI_FIRST_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def llm_wiki_dirs() -> list[Path]:
+    raw = os.getenv("LINE_LLM_WIKI_DIRS", DEFAULT_LLM_WIKI_DIRS)
+    if raw.strip().lower() in {"", "0", "false", "no", "off"}:
+        return []
+    dirs: list[Path] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,;\n]+", raw):
+        value = part.strip()
+        if not value:
+            continue
+        path = Path(value).expanduser()
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            dirs.append(path)
+    return dirs
+
+
+def llm_wiki_existing_dirs() -> list[Path]:
+    return [path for path in llm_wiki_dirs() if path.exists() and path.is_dir()]
+
+
 def knowledge_dir() -> Path:
     return knowledge_dirs()[0]
 
@@ -861,7 +905,12 @@ def knowledge_source_files(roots: list[Path], extra_paths: list[Path]) -> list[P
             files.append(path)
         elif path.exists() and path.is_dir():
             files.extend(sorted(item for item in path.rglob("*.md") if item.is_file()))
-    files = [path for path in files if is_supported_guideline_file(path)]
+    wiki_roots = llm_wiki_existing_dirs() if llm_wiki_enabled() else []
+    files = [
+        path
+        for path in files
+        if is_supported_guideline_file(path) and not path_is_within_any(path, wiki_roots)
+    ]
 
     deduped: list[Path] = []
     seen: set[str] = set()
@@ -878,6 +927,22 @@ def is_supported_guideline_file(path: Path) -> bool:
     if lower.startswith("icon") or "/." in str(path):
         return False
     return path.suffix.lower() == ".md"
+
+
+def path_is_within_any(path: Path, roots: list[Path]) -> bool:
+    if not roots:
+        return False
+    try:
+        resolved = path.resolve()
+    except OSError:
+        resolved = path
+    for root in roots:
+        try:
+            resolved.relative_to(root.resolve())
+            return True
+        except (OSError, ValueError):
+            continue
+    return False
 
 
 def skippable_guideline_line(line: str) -> bool:
@@ -1473,6 +1538,182 @@ def compiled_artifact_text(chunk: KnowledgeChunk, artifact_type: str) -> str:
     )
 
 
+def llm_wiki_artifacts_from_dirs() -> list[KnowledgeChunk]:
+    if not llm_wiki_enabled():
+        return []
+    artifacts: list[KnowledgeChunk] = []
+    for root in llm_wiki_existing_dirs():
+        artifacts.extend(llm_wiki_artifacts_from_dir(root))
+    return artifacts
+
+
+def llm_wiki_artifacts_from_dir(root: Path) -> list[KnowledgeChunk]:
+    include_dirs = tuple(
+        part.strip().strip("/")
+        for part in os.getenv(
+            "LINE_LLM_WIKI_INCLUDE_DIRS",
+            "guidelines,concepts,drugs,comparisons,queries,teaching,patient-education",
+        ).split(",")
+        if part.strip()
+    )
+    artifacts: list[KnowledgeChunk] = []
+    for path in sorted(root.rglob("*.md")):
+        if not path.is_file() or path.name.lower().startswith("icon"):
+            continue
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            continue
+        parts = relative.parts
+        if not parts:
+            continue
+        if parts[0] in {"raw", ".obsidian"}:
+            continue
+        if path.name in {"SCHEMA.md", "index.md", "log.md"}:
+            continue
+        if include_dirs and parts[0] not in include_dirs:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        frontmatter, body = split_frontmatter(text)
+        if not body.strip():
+            continue
+        artifacts.extend(llm_wiki_chunks_from_page(root.name, str(relative), frontmatter, body))
+    return artifacts
+
+
+def split_frontmatter(text: str) -> tuple[dict[str, str], str]:
+    if not text.startswith("---"):
+        return {}, text
+    match = re.match(r"^---\s*\n(.*?)\n---\s*\n?(.*)$", text, flags=re.S)
+    if not match:
+        return {}, text
+    fields: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        if ":" not in line or line.startswith(" "):
+            continue
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip().strip("'\"")
+    return fields, match.group(2)
+
+
+def llm_wiki_chunks_from_page(
+    wiki_name: str,
+    relative_path: str,
+    frontmatter: dict[str, str],
+    body: str,
+) -> list[KnowledgeChunk]:
+    title = clean_cell_text(frontmatter.get("title") or Path(relative_path).stem.replace("-", " "))
+    page_type = clean_cell_text(frontmatter.get("type") or Path(relative_path).parts[0])
+    wiki_category = Path(relative_path).parts[0] if Path(relative_path).parts else "wiki"
+    evidence_level = clean_cell_text(frontmatter.get("evidence_level") or "")
+    confidence = clean_cell_text(frontmatter.get("confidence") or "")
+    status = clean_cell_text(frontmatter.get("status") or "")
+    tags = clean_cell_text(frontmatter.get("tags") or "")
+    clinical_use = clean_cell_text(frontmatter.get("clinical_use") or "")
+    source_label = f"LLM Wiki {wiki_category}: {title}"
+    source = f"{wiki_name}/{relative_path}"
+    sections = llm_wiki_section_blocks(body)
+    if not sections:
+        sections = [(title, body)]
+
+    chunks: list[KnowledgeChunk] = []
+    for section, section_text in sections:
+        compact = normalize_wiki_body(section_text)
+        if len(compact) < 80:
+            continue
+        metadata = tuple(
+            dedupe_terms(
+                [
+                    "llm_wiki",
+                    "compiled_knowledge_layer",
+                    f"wiki_page:{relative_path}",
+                    f"wiki_category:{wiki_category}",
+                    f"wiki_type:{page_type}",
+                    f"evidence_level:{evidence_level}" if evidence_level else "",
+                    f"confidence:{confidence}" if confidence else "",
+                    f"status:{status}" if status else "",
+                    f"clinical_use:{clinical_use}" if clinical_use else "",
+                    *frontmatter_list_values(tags, "tag"),
+                ]
+            )
+        )
+        artifact_text = "\n".join(
+            part
+            for part in [
+                "LLM Wiki page artifact",
+                f"Wiki page: {relative_path}",
+                f"Title: {title}",
+                f"Page type: {page_type}",
+                f"Evidence level: {evidence_level or 'not specified'}",
+                f"Confidence: {confidence or 'not specified'}",
+                f"Status: {status or 'not specified'}",
+                "Role: Use this as first-line compiled knowledge. Verify exact clinical thresholds against raw guideline Markdown when needed.",
+                "",
+                compact,
+            ]
+            if part is not None
+        )
+        chunks.append(
+            KnowledgeChunk(
+                source,
+                source_label,
+                title,
+                section or title,
+                "llm_wiki_page",
+                artifact_text,
+                compact,
+                metadata,
+                chunk_tokens(source_label, title, section or title, "llm_wiki_page", artifact_text, metadata),
+            )
+        )
+    return chunks
+
+
+def llm_wiki_section_blocks(body: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, list[str]]] = []
+    current_heading = ""
+    current_lines: list[str] = []
+    for raw in body.splitlines():
+        heading = HEADING_RE.match(raw.strip())
+        if heading:
+            if current_lines:
+                blocks.append((current_heading, current_lines))
+            current_heading = normalize_heading(heading.group(1))
+            current_lines = [raw]
+            continue
+        current_lines.append(raw)
+    if current_lines:
+        blocks.append((current_heading, current_lines))
+
+    # Keep short pages whole; split long pages so search can target sections.
+    joined = "\n".join(line for _, lines in blocks for line in lines)
+    if len(joined) <= int(os.getenv("LINE_LLM_WIKI_PAGE_CHUNK_CHARS", "3600")):
+        first_heading = next((heading for heading, _ in blocks if heading), "")
+        return [(first_heading, joined)]
+    return [(heading, "\n".join(lines)) for heading, lines in blocks]
+
+
+def normalize_wiki_body(text: str) -> str:
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    text = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", text)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def frontmatter_list_values(value: str, prefix: str) -> list[str]:
+    if not value:
+        return []
+    cleaned = value.strip()
+    if cleaned.startswith("[") and cleaned.endswith("]"):
+        cleaned = cleaned[1:-1]
+    parts = [part.strip().strip("'\"") for part in cleaned.split(",")]
+    return [f"{prefix}:{part}" for part in parts if part]
+
+
 def section_parent_context(lines: list[str]) -> str:
     context_lines: list[str] = []
     for line in lines:
@@ -1521,11 +1762,25 @@ def load_knowledge_base() -> KnowledgeBase | None:
     roots = knowledge_dirs()
     extras = extra_knowledge_paths()
     chunk_chars = int(os.getenv("LINE_KNOWLEDGE_CHUNK_CHARS", "1800"))
-    if not any(root.exists() for root in roots) and not any(path.exists() for path in extras):
+    wiki_roots = llm_wiki_existing_dirs() if llm_wiki_enabled() else []
+    if not any(root.exists() for root in roots) and not any(path.exists() for path in extras) and not wiki_roots:
         return None
 
     global _knowledge_cache, _knowledge_cache_key
-    cache_key = ("|".join([*[str(root) for root in roots], *[str(path) for path in extras]]), chunk_chars)
+    cache_key = (
+        "|".join(
+            [
+                *[str(root) for root in roots],
+                *[str(path) for path in extras],
+                *[f"wiki:{path}" for path in llm_wiki_dirs()],
+            ]
+        ),
+        chunk_chars,
+        int(llm_wiki_enabled()),
+        int(llm_wiki_first_enabled()),
+        os.getenv("LINE_LLM_WIKI_INCLUDE_DIRS", ""),
+        os.getenv("LINE_LLM_WIKI_PAGE_CHUNK_CHARS", "3600"),
+    )
     if _knowledge_cache and _knowledge_cache_key == cache_key:
         return _knowledge_cache
     with _knowledge_lock:
@@ -1694,6 +1949,9 @@ def knowledge_status() -> dict[str, object]:
     kb = load_knowledge_base()
     roots = knowledge_dirs()
     extras = extra_knowledge_paths()
+    wiki_dirs = llm_wiki_dirs()
+    wiki_existing_dirs = llm_wiki_existing_dirs() if llm_wiki_enabled() else []
+    wiki_file_count = sum(len(list(root.rglob("*.md"))) for root in wiki_existing_dirs if root.exists() and root.is_dir())
     extra_existing = [path for path in extras if path.exists() and path.is_file()]
     dir_file_count = sum(len(list(root.rglob("*.md"))) for root in roots if root.exists() and root.is_dir())
     loaded_files_by_source: dict[str, int] = {}
@@ -1724,6 +1982,11 @@ def knowledge_status() -> dict[str, object]:
         "chunk_type_counts": chunk_type_counts,
         "compiled_knowledge_enabled": compiled_knowledge_enabled(),
         "compiled_artifacts": kb.compiled_artifact_count if kb else 0,
+        "llm_wiki_enabled": llm_wiki_enabled(),
+        "llm_wiki_first_enabled": llm_wiki_first_enabled(),
+        "llm_wiki_dirs": [str(path) for path in wiki_dirs],
+        "llm_wiki_existing_dirs": [str(path) for path in wiki_existing_dirs],
+        "llm_wiki_files": wiki_file_count,
         "metadata_tagged_chunks": sum(1 for chunk in kb.chunks if chunk.metadata) if kb else 0,
         "inverted_index_enabled": inverted_index_enabled(),
         "inverted_index_terms": len(kb.token_postings) if kb else 0,
@@ -2814,6 +3077,8 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
             if selected and all(hit.section != item.section for item in selected):
                 diversity_bonus += 0.08
             redundancy_penalty = 0.0
+            if llm_wiki_first_enabled() and hit.chunk_type == "llm_wiki_page":
+                coverage_bonus += 0.55
             if preferred_source and preferred_source not in hit.source_label.lower():
                 redundancy_penalty += 0.85
             if target_facets and not (facets & target_facets):
@@ -3053,6 +3318,8 @@ def hit_facets_from_text(
         facets.add("treatment")
     if chunk_type in {"table_row", "compiled_table_fact"}:
         facets.add("table")
+    if chunk_type == "llm_wiki_page" or "llm_wiki" in haystack or "compiled_knowledge_layer" in haystack:
+        facets.add("llm_wiki_context")
     if "kdigo" in haystack:
         facets.add("source_kdigo")
     elif "aace" in haystack:
@@ -3240,6 +3507,8 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 1.22
     if chunk.chunk_type == "compiled_section_map":
         adjustment *= 0.58
+    if chunk.chunk_type == "llm_wiki_page":
+        adjustment *= 8.5 if llm_wiki_first_enabled() else 1.15
     if chunk.chunk_type in {"compiled_concept", "compiled_cross_guideline"} and desired_compiled_concepts:
         matched_compiled_concept = any(f"clinical_concept:{concept}" in haystack for concept in desired_compiled_concepts)
         adjustment *= 8.0 if matched_compiled_concept else 0.0001
