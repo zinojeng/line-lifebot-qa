@@ -67,6 +67,11 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "飯": ("meal", "nutrition", "postprandial", "carbohydrate"),
     "飲食": ("nutrition", "diet", "medical nutrition therapy", "carbohydrate", "meal"),
     "運動": ("physical activity", "exercise", "sedentary", "fitness"),
+    "骨質疏鬆": ("osteoporosis", "bone health", "fracture risk", "bone mineral density", "DXA", "BMD", "T-score", "FRAX"),
+    "骨鬆": ("osteoporosis", "bone health", "fracture risk", "bone mineral density", "DXA", "BMD", "T-score", "FRAX"),
+    "骨折": ("fracture", "fracture risk", "fragility fracture", "falls", "osteoporosis", "bone health"),
+    "骨密度": ("bone mineral density", "BMD", "DXA", "T-score", "osteoporosis", "fracture risk"),
+    "骨骼": ("bone health", "osteoporosis", "fracture risk", "calcium", "vitamin D"),
     "藥": ("pharmacologic", "medication", "insulin", "metformin", "GLP-1", "SGLT2"),
     "胰島素": ("insulin", "hypoglycemia", "injection"),
     "腎": ("kidney", "CKD", "albuminuria", "eGFR", "renal"),
@@ -1309,6 +1314,12 @@ def compiled_concept_specs() -> dict[str, dict[str, object]]:
             "facets": ("liver_context",),
             "patterns": (r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fibrosis)\b",),
         },
+        "bone_health": {
+            "label": "Bone health, osteoporosis, and fracture risk in diabetes",
+            "aliases": ("糖尿病骨質疏鬆", "骨鬆", "骨折風險", "DXA", "BMD", "T-score", "FRAX"),
+            "facets": ("bone_health", "fracture_risk"),
+            "patterns": (r"\b(osteoporosis|bone health|fracture risk|fragility fracture|bone mineral density|bmd|dxa|t-score|frax|calcium|vitamin d|bisphosphonate|denosumab|romosozumab)\b",),
+        },
         "obesity_weight": {
             "label": "Obesity and weight management in diabetes",
             "aliases": ("肥胖", "體重管理", "weight management", "metabolic surgery"),
@@ -1387,10 +1398,16 @@ def desired_compiled_concepts_for_query(query: str, query_lower: str | None = No
         desired.add("retinopathy")
     if "pad" in concepts:
         desired.add("pad")
+    if "bone_health" in concepts:
+        desired.add("bone_health")
     if "liver" in concepts or any(term in surface_query for term in ("肝", "脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
         term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "fatty liver")
     ):
         desired.add("masld_mash")
+    if "bone_health" in concepts or any(term in surface_query for term in ("骨質疏鬆", "骨鬆", "骨折", "骨密度", "骨骼")) or any(
+        term in lower for term in ("osteoporosis", "bone health", "fracture", "bmd", "dxa", "t-score", "frax")
+    ):
+        desired.add("bone_health")
     if "technology" in concepts or any(term in lower for term in ("cgm", "continuous glucose", "time in range", "tir", "gmi")):
         desired.add("cgm_metrics")
     if any(term in surface_query for term in ("血糖控制", "血糖目標", "糖化血色素目標")) or any(
@@ -3014,6 +3031,10 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
         )
     ):
         concepts.update({"pad", "ascvd"})
+    if any(term in query for term in ("骨質疏鬆", "骨鬆", "骨折", "骨密度", "骨骼")) or any(
+        term in lower for term in ("osteoporosis", "bone health", "fracture", "fragility fracture", "bone mineral density", "bmd", "dxa", "t-score", "frax")
+    ):
+        concepts.add("bone_health")
     if any(term in query for term in ("分期", "分級", "嚴重度", "第幾期", "程度")) or any(
         term in lower for term in ("staging", "stage", "severity", "classification", "mild", "moderate", "severe")
     ):
@@ -3345,6 +3366,14 @@ def required_facets(query: str) -> set[str]:
         term in lower for term in ("diagnosis", "screening", "criteria", "ogtt")
     ):
         facets.add("diagnosis")
+    if any(term in query for term in ("骨質疏鬆", "骨鬆", "骨折", "骨密度", "骨骼")) or any(
+        term in lower for term in ("osteoporosis", "bone health", "fracture", "fragility fracture", "bone mineral density", "bmd", "dxa", "t-score", "frax")
+    ):
+        facets.update({"bone_health", "fracture_risk"})
+        if any(term in query for term in ("治療", "處理", "不同", "用藥")) or any(term in lower for term in ("treatment", "therapy", "management")):
+            facets.add("treatment")
+        if any(term in query for term in ("骨密度", "篩檢", "診斷", "t值", "T-score")) or any(term in lower for term in ("bmd", "dxa", "t-score", "frax", "screening", "diagnosis")):
+            facets.update({"diagnosis", "threshold"})
     if any(term in query for term in ("腳", "足", "足部", "神經")) or any(
         term in lower for term in ("foot", "neuropathy", "monofilament", "ulcer")
     ):
@@ -3413,6 +3442,8 @@ def hit_facets_from_text(
         facets.add("diagnosis")
     if re.search(r"\b(retinopathy|retinal|macular edema|dme|npdr|pdr|ophthalmologist|anti-vegf|photocoagulation|vitrectomy)\b", haystack):
         facets.add("retinopathy_context")
+    if re.search(r"\b(osteoporosis|bone health|fracture risk|fragility fracture|bone mineral density|bmd|dxa|t-score|frax|calcium|vitamin d|bisphosphonate|denosumab|teriparatide|abaloparatide|romosozumab)\b|骨質疏鬆|骨鬆|骨折|骨密度|骨骼", haystack):
+        facets.update({"bone_health", "fracture_risk"})
     if re.search(r"\b(staging|stage|severity|classification|mild|moderate|severe|nonproliferative|proliferative|npdr|pdr|microaneurysms|neovascularization)\b", haystack):
         facets.add("staging")
     if re.search(r"\b(foot|neuropathy|monofilament|ulcer|protective sensation|peripheral artery|pad|lops|podiatrist)\b", haystack):
@@ -3616,6 +3647,7 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     )
     blood_pressure_target_query = "blood_pressure_target" in concepts
     lipid_target_query = "lipid_target" in concepts
+    bone_health_query = "bone_health" in concepts
 
     if chunk.chunk_type == "table_row":
         adjustment *= 1.25
@@ -3644,6 +3676,13 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 0.05
     if re.search(r"\b(reference|references|acknowledg|appendix)\b", haystack):
         adjustment *= 0.35
+    if bone_health_query and re.search(
+        r"\b(osteoporosis|bone health|fracture risk|fragility fracture|bone mineral density|bmd|dxa|t-score|frax|calcium|vitamin d|bisphosphonate|denosumab|romosozumab|thiazolidinedione|sulfonylurea)\b|骨質疏鬆|骨鬆|骨折|骨密度|骨骼",
+        haystack,
+    ):
+        adjustment *= 6.0
+    if bone_health_query and ("dc26s004" in haystack or "section 4" in haystack or "comprehensive medical evaluation" in haystack):
+        adjustment *= 2.2
     if not vaccination_query and re.search(
         r"\b(vaccin|immunization|influenza|pneumococcal|covid|hepatitis b|respiratory syncytial virus|rsv)\b",
         haystack,

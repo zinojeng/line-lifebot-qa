@@ -100,7 +100,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-retrieval-failure-loop-v35")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-bone-health-routing-v36")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -905,6 +905,7 @@ def retrieval_failure_term_routes(user_text: str) -> list[tuple[str, str]]:
         (r"排糖藥|sglt2|sglt-2|egfr.*20|腎功能.*20", "drugs/sglt2i-egfr-under-20-not-on-dialysis"),
         (r"glp.?1|glp-1ra|洗腎.*glp|透析.*glp|dialysis.*glp", "drugs/glp1-based-therapy-on-dialysis"),
         (r"cgm|連續血糖|糖尿病新科技|血糖機|time in range|tir", "concepts/diabetes-technology-cgm-aid"),
+        (r"骨質疏鬆|骨鬆|骨折|骨密度|骨骼|osteoporosis|bone health|fracture|bmd|dxa|frax|t-score", "concepts/diabetes-bone-health-osteoporosis"),
         (r"uacr|albuminuria|白蛋白尿|尿蛋白|dkd|糖尿病腎", "concepts/diabetes-ckd-risk-stratification"),
         (r"metformin|finerenone|nsmra|a1c.*ckd|洗腎.*a1c|低血糖.*腎", "comparisons/ada-2026-vs-kdigo-2026-diabetes-ckd"),
         (r"older adults|長者|老人|pregnancy|懷孕|妊娠|steroid|glucocorticoid|住院", "guidelines/ada-standards-of-care-2026"),

@@ -105,6 +105,11 @@ CASES = (
         ("masld", "mash", "liver", "diabetes"),
     ),
     SmokeCase(
+        "bone-health-osteoporosis",
+        "糖尿病與骨質疏鬆，治療是否與一般人不同？",
+        ("osteoporosis", "bone health", "fracture", "t-score", "frax"),
+    ),
+    SmokeCase(
         "foot-care",
         "糖尿病足部照護和 PAD 風險 ADA 2026 怎麼整理？",
         ("foot", "pad", "ada"),
