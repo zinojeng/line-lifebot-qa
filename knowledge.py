@@ -9,6 +9,7 @@ import math
 import os
 import re
 import threading
+from time import monotonic as time_monotonic
 import urllib.error
 import urllib.request
 from typing import Iterable
@@ -1870,9 +1871,21 @@ def search_knowledge(query: str) -> list[KnowledgeHit]:
 
 
 def search_knowledge_candidates(query: str) -> list[KnowledgeHit]:
+    return search_knowledge_candidates_with_trace(query)["hits"]
+
+
+def search_knowledge_candidates_with_trace(query: str) -> dict[str, object]:
+    started_at = time_monotonic()
     kb = load_knowledge_base()
     if not kb:
-        return []
+        return {
+            "hits": [],
+            "retrieval_mode": "fallback_raw",
+            "elapsed_ms": round((time_monotonic() - started_at) * 1000, 2),
+            "fast_path_enabled": False,
+            "fast_hit_count": 0,
+            "fallback_reason": "knowledge_base_unavailable",
+        }
     limit = int(os.getenv("LINE_KNOWLEDGE_CANDIDATE_SNIPPETS", "15"))
     excerpt_chars = int(os.getenv("LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS", "700"))
     fast_path_enabled = os.getenv("LINE_LLM_WIKI_FAST_PATH_ENABLED", "1").strip().lower() not in {
@@ -1881,15 +1894,34 @@ def search_knowledge_candidates(query: str) -> list[KnowledgeHit]:
         "no",
         "off",
     }
+    fast_hit_count = 0
+    fallback_reason = "fast_path_disabled"
     if fast_path_enabled:
         min_hits = max(1, int(os.getenv("LINE_LLM_WIKI_FAST_PATH_MIN_HITS", "5")))
         fast_limit = max(limit, min_hits)
         fast_hits = kb.search_chunk_pool(query, kb.curated_fast_path_chunks(), limit=fast_limit, excerpt_chars=excerpt_chars)
+        fast_hit_count = len(fast_hits)
         if len(fast_hits) >= min_hits and any(
             hit.chunk_type in {"llm_wiki_page", "compiled_concept", "compiled_cross_guideline"} for hit in fast_hits
         ):
-            return fast_hits[:limit]
-    return kb.search_multi(query, limit=limit, excerpt_chars=excerpt_chars)
+            return {
+                "hits": fast_hits[:limit],
+                "retrieval_mode": "fast_path",
+                "elapsed_ms": round((time_monotonic() - started_at) * 1000, 2),
+                "fast_path_enabled": True,
+                "fast_hit_count": fast_hit_count,
+                "fallback_reason": "",
+            }
+        fallback_reason = "fast_path_insufficient_hits"
+    hits = kb.search_multi(query, limit=limit, excerpt_chars=excerpt_chars)
+    return {
+        "hits": hits,
+        "retrieval_mode": "fallback_raw",
+        "elapsed_ms": round((time_monotonic() - started_at) * 1000, 2),
+        "fast_path_enabled": fast_path_enabled,
+        "fast_hit_count": fast_hit_count,
+        "fallback_reason": fallback_reason,
+    }
 
 
 def search_whole_section_context(query: str, seed_hits: list[KnowledgeHit]) -> list[KnowledgeHit]:

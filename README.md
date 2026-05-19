@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-19-llm-wiki-fastpath-v32
+APP_VERSION=2026-05-20-debug-retrieval-trace-v33
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -85,7 +85,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-19-llm-wiki-fastpath-v32
+APP_VERSION=2026-05-20-debug-retrieval-trace-v33
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -399,6 +399,23 @@ Use `/debug/search` to inspect why a question can or cannot be answered:
 /debug/search?q=...&llm=true
 ```
 
+The response includes retrieval observability fields:
+
+```json
+{
+  "retrieval_mode": "fast_path",
+  "elapsed_ms": 3513.56,
+  "retrieval_elapsed_ms": 780.12,
+  "fast_hit_count": 15,
+  "fallback_reason": ""
+}
+```
+
+`retrieval_mode=fast_path` means the question was answered from the LLM Wiki /
+compiled knowledge layer. `retrieval_mode=fallback_raw` means the curated layer
+was disabled or insufficient, so the app fell back to full raw guideline RAG.
+The endpoint also writes the same mode and timing summary to Zeabur logs.
+
 After uploading new guideline or wiki files into `/app/data`, rebuild the
 in-memory knowledge cache without redeploying:
 
@@ -549,7 +566,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-19-llm-wiki-fastpath-v32",
+  "app_version": "2026-05-20-debug-retrieval-trace-v33",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {

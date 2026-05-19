@@ -34,6 +34,7 @@ try:
         query_variant_specs,
         required_facets,
         search_knowledge_candidates,
+        search_knowledge_candidates_with_trace,
         search_whole_section_context,
     )
 except ModuleNotFoundError:
@@ -47,6 +48,16 @@ except ModuleNotFoundError:
 
     def search_knowledge_candidates(query: str) -> list[Any]:
         return []
+
+    def search_knowledge_candidates_with_trace(query: str) -> dict[str, Any]:
+        return {
+            "hits": [],
+            "retrieval_mode": "fallback_raw",
+            "elapsed_ms": 0.0,
+            "fast_path_enabled": False,
+            "fast_hit_count": 0,
+            "fallback_reason": "knowledge_module_unavailable",
+        }
 
     def search_whole_section_context(query: str, seed_hits: list[Any]) -> list[Any]:
         return []
@@ -88,7 +99,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-19-llm-wiki-fastpath-v32")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-debug-retrieval-trace-v33")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -1741,6 +1752,7 @@ def serialize_debug_hit(hit: KnowledgeHit, index: int) -> dict[str, Any]:
 
 
 def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
+    trace_started_at = time_monotonic()
     api_key = active_api_key() if use_llm else ""
     recent_context = ""
     clinical_intent = build_clinical_intent(api_key, user_text, recent_context) if use_llm else fallback_clinical_intent(user_text)
@@ -1748,7 +1760,8 @@ def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
         part for part in [user_text, clinical_intent_text(clinical_intent)] if part
     ).strip()
     variants = query_variant_specs(retrieval_query)
-    candidates = search_knowledge_candidates(retrieval_query)
+    retrieval_trace = search_knowledge_candidates_with_trace(retrieval_query)
+    candidates = list(retrieval_trace.get("hits", []))
     selected_hits, answerable, coverage_gaps = select_guideline_hits(api_key, user_text, candidates, clinical_intent)
     selected_hits, recursive_note = append_recursive_coverage_hits(user_text, selected_hits, clinical_intent)
     selected_hits, whole_section_note = append_whole_section_context_hits(user_text, selected_hits, clinical_intent)
@@ -1763,6 +1776,12 @@ def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
         "query": user_text,
         "use_llm": use_llm,
         "guideline_scope": guideline_scope,
+        "retrieval_mode": retrieval_trace.get("retrieval_mode", "fallback_raw"),
+        "elapsed_ms": round((time_monotonic() - trace_started_at) * 1000, 2),
+        "retrieval_elapsed_ms": retrieval_trace.get("elapsed_ms", 0.0),
+        "fast_path_enabled": retrieval_trace.get("fast_path_enabled", False),
+        "fast_hit_count": retrieval_trace.get("fast_hit_count", 0),
+        "fallback_reason": retrieval_trace.get("fallback_reason", ""),
         "retrieval_query": retrieval_query,
         "clinical_intent": clinical_intent,
         "query_variants": [
@@ -2007,7 +2026,16 @@ def debug_search(q: str = "", llm: bool = False, x_debug_token: str = Header(def
     query = q.strip()
     if not query:
         raise HTTPException(status_code=400, detail="missing q")
-    return debug_search_trace(query, use_llm=llm)
+    trace = debug_search_trace(query, use_llm=llm)
+    print(
+        "debug search "
+        f"mode={trace.get('retrieval_mode')} "
+        f"elapsed_ms={trace.get('elapsed_ms')} "
+        f"retrieval_elapsed_ms={trace.get('retrieval_elapsed_ms')} "
+        f"candidates={trace.get('candidate_count')} "
+        f"query={query[:120]!r}"
+    )
+    return trace
 
 
 @app.post("/debug/knowledge/reload")
