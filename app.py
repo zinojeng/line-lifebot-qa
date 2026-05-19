@@ -4,7 +4,7 @@ import asyncio
 import base64
 import concurrent.futures
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import hashlib
 import hmac
@@ -196,6 +196,7 @@ LINE_QUERY_CANDIDATE_DIR = os.getenv(
     "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-candidates",
 )
 LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS = int(os.getenv("LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS", "1200"))
+LINE_QUERY_CANDIDATE_TIMEZONE = timezone(timedelta(hours=8))
 
 app = FastAPI(title="LifeBot Fast LINE QA")
 
@@ -814,7 +815,7 @@ def write_query_candidate(
     try:
         candidate_dir = Path(LINE_QUERY_CANDIDATE_DIR)
         candidate_dir.mkdir(parents=True, exist_ok=True)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(LINE_QUERY_CANDIDATE_TIMEZONE)
         question = redacted_query_candidate_text(user_text)
         digest = hashlib.sha1(question.encode("utf-8", errors="ignore")).hexdigest()[:10]
         filename = f"{now.date().isoformat()}-{query_candidate_slug(question)}-{digest}.md"
