@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-19-llm-wiki-first-v30
+APP_VERSION=2026-05-19-llm-wiki-preload-v31
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -39,6 +39,9 @@ LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
 LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
+LINE_KNOWLEDGE_PRELOAD_ENABLED=1
+LINE_HEALTH_FAST_ENABLED=1
+LINE_HEALTH_STATUS_CACHE_SECONDS=30
 LINE_WHOLE_SECTION_CONTEXT_ENABLED=1
 LINE_WHOLE_SECTION_CONTEXT_MAX_SECTIONS=2
 LINE_WHOLE_SECTION_CONTEXT_CHARS=9000
@@ -80,7 +83,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-19-llm-wiki-first-v30
+APP_VERSION=2026-05-19-llm-wiki-preload-v31
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -107,6 +110,9 @@ LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
 LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
+LINE_KNOWLEDGE_PRELOAD_ENABLED=1
+LINE_HEALTH_FAST_ENABLED=1
+LINE_HEALTH_STATUS_CACHE_SECONDS=30
 LINE_WHOLE_SECTION_CONTEXT_ENABLED=1
 LINE_DEBUG_SEARCH_ENABLED=1
 ```
@@ -172,12 +178,21 @@ LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
 LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
+LINE_KNOWLEDGE_PRELOAD_ENABLED=1
+LINE_HEALTH_FAST_ENABLED=1
+LINE_HEALTH_STATUS_CACHE_SECONDS=30
 ```
 
 Health check includes `knowledge.available`, `knowledge.files`, and
 `knowledge.chunks`, plus `knowledge.llm_wiki_files` and
 `knowledge.llm_wiki_existing_dirs`, so deployment can verify the wiki and raw
 guideline files are mounted correctly.
+
+Knowledge is preloaded in a background thread on service startup. During cold
+start, `/` may return a lightweight `knowledge.warming_up` status instead of
+blocking while the full guideline index is built. After the preload completes,
+the health endpoint returns the cached full knowledge status for
+`LINE_HEALTH_STATUS_CACHE_SECONDS`.
 For production, make sure you have permission to use the guideline files in this
 kind of application and mount/copy them into the deployed service path.
 
@@ -375,6 +390,15 @@ Use `/debug/search` to inspect why a question can or cannot be answered:
 /debug/search?q=...&llm=true
 ```
 
+After uploading new guideline or wiki files into `/app/data`, rebuild the
+in-memory knowledge cache without redeploying:
+
+```bash
+curl -X POST https://linebotqa.zeabur.app/debug/knowledge/reload
+```
+
+If `LINE_DEBUG_TOKEN` is set, pass it as `x-debug-token`.
+
 The response includes the retrieval query, query variants, required facets,
 candidate hits, selected hits, recursive coverage notes, whole-section context
 notes, and missing facets. If `LINE_DEBUG_TOKEN` is set, include it as the
@@ -516,7 +540,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-19-llm-wiki-first-v30",
+  "app_version": "2026-05-19-llm-wiki-preload-v31",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {
@@ -561,6 +585,8 @@ The health check should include:
     "compiled_guideline_artifacts": true,
     "llm_wiki_first": true,
     "llm_wiki_files": 20,
+    "knowledge_preload": true,
+    "fast_health_status": true,
     "long_context_verification": true,
     "debug_search_endpoint": true,
     "guideline_strict_grounding_current": true,

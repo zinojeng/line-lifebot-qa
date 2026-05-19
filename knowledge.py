@@ -1791,6 +1791,13 @@ def load_knowledge_base() -> KnowledgeBase | None:
         return _knowledge_cache
 
 
+def reset_knowledge_cache() -> None:
+    global _knowledge_cache, _knowledge_cache_key
+    with _knowledge_lock:
+        _knowledge_cache = None
+        _knowledge_cache_key = None
+
+
 def search_knowledge(query: str) -> list[KnowledgeHit]:
     kb = load_knowledge_base()
     if not kb:

@@ -12,6 +12,7 @@ import os
 import re
 import sqlite3
 import threading
+from time import monotonic as time_monotonic
 import urllib.error
 import urllib.request
 from typing import Any
@@ -26,6 +27,8 @@ try:
         knowledge_no_answer_text,
         knowledge_prompt_from_hits,
         knowledge_status,
+        load_knowledge_base,
+        reset_knowledge_cache,
         hit_facets,
         clinical_search_brain_plan,
         query_variant_specs,
@@ -67,6 +70,12 @@ except ModuleNotFoundError:
             "error": "knowledge.py not found in deployment",
         }
 
+    def load_knowledge_base() -> Any:
+        return None
+
+    def reset_knowledge_cache() -> None:
+        return None
+
     def required_facets(query: str) -> set[str]:
         return set()
 
@@ -79,7 +88,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-19-llm-wiki-first-v30")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-19-llm-wiki-preload-v31")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -144,6 +153,19 @@ LINE_DEBUG_SEARCH_ENABLED = os.getenv("LINE_DEBUG_SEARCH_ENABLED", "1").strip().
 }
 LINE_DEBUG_SEARCH_MAX_HITS = int(os.getenv("LINE_DEBUG_SEARCH_MAX_HITS", "12"))
 LINE_RETRIEVAL_QUERY_MAX_CHARS = int(os.getenv("LINE_RETRIEVAL_QUERY_MAX_CHARS", "1400"))
+LINE_KNOWLEDGE_PRELOAD_ENABLED = os.getenv("LINE_KNOWLEDGE_PRELOAD_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_HEALTH_FAST_ENABLED = os.getenv("LINE_HEALTH_FAST_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_HEALTH_STATUS_CACHE_SECONDS = int(os.getenv("LINE_HEALTH_STATUS_CACHE_SECONDS", "30"))
 LINE_TIMEOUT = int(os.getenv("LINE_TIMEOUT", "12"))
 LINE_MEMORY_ENABLED = os.getenv("LINE_MEMORY_ENABLED", "1").strip() != "0"
 LINE_MEMORY_DB = os.getenv("LINE_MEMORY_DB", "/tmp/line_lifebot_memory.sqlite3")
@@ -158,6 +180,18 @@ _memory_ready = False
 _memory_lock = threading.Lock()
 _session_locks: dict[str, threading.Lock] = {}
 _session_locks_guard = threading.Lock()
+_knowledge_preload_started = False
+_knowledge_preload_done = False
+_knowledge_preload_error = ""
+_knowledge_preload_seconds = 0.0
+_knowledge_status_cache: dict[str, object] | None = None
+_knowledge_status_cache_at = 0.0
+_knowledge_status_lock = threading.Lock()
+
+
+@app.on_event("startup")
+def preload_knowledge_on_startup() -> None:
+    start_knowledge_preload()
 
 
 SYSTEM_PROMPT = """你是 LifeBot 糖尿病衛教 LINE 機器人，請用繁體中文回答病友問題。
@@ -190,6 +224,67 @@ def memory_backend() -> str:
     if urlparse(url).scheme in {"postgres", "postgresql"}:
         return "postgres"
     return "sqlite"
+
+
+def refresh_cached_knowledge_status() -> dict[str, object]:
+    global _knowledge_status_cache, _knowledge_status_cache_at
+    status = knowledge_status()
+    with _knowledge_status_lock:
+        _knowledge_status_cache = status
+        _knowledge_status_cache_at = time_monotonic()
+    return status
+
+
+def minimal_knowledge_status() -> dict[str, object]:
+    return {
+        "enabled": True,
+        "available": _knowledge_preload_done and not _knowledge_preload_error,
+        "warming_up": _knowledge_preload_started and not _knowledge_preload_done,
+        "preload_started": _knowledge_preload_started,
+        "preload_done": _knowledge_preload_done,
+        "preload_error": _knowledge_preload_error,
+        "preload_seconds": round(_knowledge_preload_seconds, 3),
+        "status": "warming_up" if _knowledge_preload_started and not _knowledge_preload_done else "not_loaded",
+    }
+
+
+def cached_knowledge_status(force: bool = False) -> dict[str, object]:
+    if not LINE_HEALTH_FAST_ENABLED or force:
+        return refresh_cached_knowledge_status()
+    now = time_monotonic()
+    with _knowledge_status_lock:
+        cached = _knowledge_status_cache
+        cached_at = _knowledge_status_cache_at
+    if cached and now - cached_at <= LINE_HEALTH_STATUS_CACHE_SECONDS:
+        return cached
+    if _knowledge_preload_started and not _knowledge_preload_done:
+        return cached or minimal_knowledge_status()
+    return refresh_cached_knowledge_status()
+
+
+def knowledge_preload_worker() -> None:
+    global _knowledge_preload_done, _knowledge_preload_error, _knowledge_preload_seconds
+    started = time_monotonic()
+    try:
+        load_knowledge_base()
+        refresh_cached_knowledge_status()
+        _knowledge_preload_error = ""
+    except Exception as exc:
+        _knowledge_preload_error = f"{type(exc).__name__}: {exc}"
+        print(f"Knowledge preload failed: {_knowledge_preload_error}")
+    finally:
+        _knowledge_preload_seconds = time_monotonic() - started
+        _knowledge_preload_done = True
+        print(f"Knowledge preload finished in {_knowledge_preload_seconds:.2f}s")
+
+
+def start_knowledge_preload() -> None:
+    global _knowledge_preload_started
+    if not LINE_KNOWLEDGE_PRELOAD_ENABLED or _knowledge_preload_started:
+        return
+    _knowledge_preload_started = True
+    thread = threading.Thread(target=knowledge_preload_worker, name="knowledge-preload", daemon=True)
+    thread.start()
 
 
 @contextmanager
@@ -1697,7 +1792,7 @@ def debug_search_trace(user_text: str, use_llm: bool = False) -> dict[str, Any]:
         "local_gap": local_gap,
         "recursive_note": recursive_note,
         "whole_section_note": whole_section_note,
-        "knowledge": knowledge_status(),
+        "knowledge": cached_knowledge_status(),
     }
 
 
@@ -1824,7 +1919,7 @@ async def handle_text_event(event: dict[str, Any]) -> None:
 
 @app.get("/")
 def health() -> dict[str, Any]:
-    current_knowledge_status = knowledge_status()
+    current_knowledge_status = cached_knowledge_status()
     return {
         "ok": True,
         "service": "line-lifebot-qa",
@@ -1883,6 +1978,8 @@ def health() -> dict[str, Any]:
             "llm_wiki_first": bool(current_knowledge_status.get("llm_wiki_enabled"))
             and bool(current_knowledge_status.get("llm_wiki_first_enabled")),
             "llm_wiki_files": current_knowledge_status.get("llm_wiki_files", 0),
+            "knowledge_preload": LINE_KNOWLEDGE_PRELOAD_ENABLED,
+            "fast_health_status": LINE_HEALTH_FAST_ENABLED,
             "long_context_verification": LINE_LONG_CONTEXT_VERIFICATION_ENABLED,
             "parallel_evidence_verification": LINE_PARALLEL_VERIFICATION_ENABLED,
             "debug_search_endpoint": LINE_DEBUG_SEARCH_ENABLED,
@@ -1909,6 +2006,21 @@ def debug_search(q: str = "", llm: bool = False, x_debug_token: str = Header(def
     if not query:
         raise HTTPException(status_code=400, detail="missing q")
     return debug_search_trace(query, use_llm=llm)
+
+
+@app.post("/debug/knowledge/reload")
+def debug_reload_knowledge(x_debug_token: str = Header(default="")) -> dict[str, Any]:
+    if not LINE_DEBUG_SEARCH_ENABLED:
+        raise HTTPException(status_code=404, detail="debug search disabled")
+    expected_token = os.getenv("LINE_DEBUG_TOKEN", "").strip()
+    if expected_token and not hmac.compare_digest(x_debug_token, expected_token):
+        raise HTTPException(status_code=403, detail="invalid debug token")
+    reset_knowledge_cache()
+    status = cached_knowledge_status(force=True)
+    return {
+        "ok": True,
+        "knowledge": status,
+    }
 
 
 @app.post("/line/webhook")
