@@ -88,7 +88,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-19-llm-wiki-preload-v31")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-19-llm-wiki-fastpath-v32")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -125,8 +125,8 @@ LINE_RECURSIVE_COVERAGE_ENABLED = os.getenv("LINE_RECURSIVE_COVERAGE_ENABLED", "
     "no",
     "off",
 }
-LINE_RECURSIVE_COVERAGE_MAX_QUERIES = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_QUERIES", "4"))
-LINE_RECURSIVE_COVERAGE_MAX_HITS = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_HITS", "4"))
+LINE_RECURSIVE_COVERAGE_MAX_QUERIES = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_QUERIES", "2"))
+LINE_RECURSIVE_COVERAGE_MAX_HITS = int(os.getenv("LINE_RECURSIVE_COVERAGE_MAX_HITS", "2"))
 LINE_LONG_CONTEXT_VERIFICATION_ENABLED = os.getenv("LINE_LONG_CONTEXT_VERIFICATION_ENABLED", "1").strip().lower() not in {
     "0",
     "false",
@@ -139,7 +139,7 @@ LINE_PARALLEL_VERIFICATION_ENABLED = os.getenv("LINE_PARALLEL_VERIFICATION_ENABL
     "no",
     "off",
 }
-LINE_WHOLE_SECTION_CONTEXT_ENABLED = os.getenv("LINE_WHOLE_SECTION_CONTEXT_ENABLED", "1").strip().lower() not in {
+LINE_WHOLE_SECTION_CONTEXT_ENABLED = os.getenv("LINE_WHOLE_SECTION_CONTEXT_ENABLED", "0").strip().lower() not in {
     "0",
     "false",
     "no",
@@ -1977,6 +1977,8 @@ def health() -> dict[str, Any]:
             "compiled_guideline_artifacts": bool(current_knowledge_status.get("compiled_knowledge_enabled")),
             "llm_wiki_first": bool(current_knowledge_status.get("llm_wiki_enabled"))
             and bool(current_knowledge_status.get("llm_wiki_first_enabled")),
+            "llm_wiki_fast_path": os.getenv("LINE_LLM_WIKI_FAST_PATH_ENABLED", "1").strip().lower()
+            not in {"0", "false", "no", "off"},
             "llm_wiki_files": current_knowledge_status.get("llm_wiki_files", 0),
             "knowledge_preload": LINE_KNOWLEDGE_PRELOAD_ENABLED,
             "fast_health_status": LINE_HEALTH_FAST_ENABLED,

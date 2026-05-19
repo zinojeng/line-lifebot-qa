@@ -357,6 +357,15 @@ class KeywordEntry:
     variant_queries: tuple[str, ...]
 
 
+CURATED_FAST_PATH_CHUNK_TYPES = {
+    "llm_wiki_page",
+    "compiled_recommendation",
+    "compiled_table_fact",
+    "compiled_concept",
+    "compiled_cross_guideline",
+}
+
+
 class KnowledgeBase:
     def __init__(self, roots: list[Path], extra_paths: list[Path] | None = None, chunk_chars: int = 1800) -> None:
         self.roots = roots
@@ -525,6 +534,56 @@ class KnowledgeBase:
             if len(raw_hits) >= max(limit * 4, limit + 20):
                 break
         return source_balanced_hits(raw_hits, limit)
+
+    def curated_fast_path_chunks(self) -> list[KnowledgeChunk]:
+        return [chunk for chunk in self.chunks if chunk.chunk_type in CURATED_FAST_PATH_CHUNK_TYPES]
+
+    def search_chunk_pool(
+        self,
+        query: str,
+        chunks: list[KnowledgeChunk],
+        limit: int = 3,
+        excerpt_chars: int = 520,
+    ) -> list[KnowledgeHit]:
+        query_tokens = list(expand_query_tokens(query))
+        if not query_tokens or not chunks:
+            return []
+
+        query_vector = hashed_vector(query_tokens)
+        vector_weight = float(os.getenv("LINE_KNOWLEDGE_FAST_PATH_VECTOR_WEIGHT", "0.45"))
+        scored: list[tuple[float, KnowledgeChunk]] = []
+        for chunk in chunks:
+            score = self._score(query_tokens, chunk)
+            if query_vector:
+                score += sparse_cosine(query_vector, hashed_vector(chunk.tokens)) * vector_weight
+            score *= domain_adjustment(query, chunk)
+            if score > 0:
+                scored.append((score, chunk))
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        raw_hits: list[KnowledgeHit] = []
+        seen_sources: set[tuple[str, ...]] = set()
+        for score, chunk in scored:
+            key = chunk_dedup_key(chunk)
+            if key in seen_sources:
+                continue
+            seen_sources.add(key)
+            raw_hits.append(
+                KnowledgeHit(
+                    source=chunk.source,
+                    source_label=chunk.source_label,
+                    title=chunk.title,
+                    section=chunk.section,
+                    chunk_type=chunk.chunk_type,
+                    excerpt=best_excerpt(chunk.text, query_tokens, excerpt_chars),
+                    parent_excerpt=parent_excerpt_for_chunk(chunk, query_tokens),
+                    metadata=chunk.metadata,
+                    score=score,
+                )
+            )
+            if len(raw_hits) >= max(limit * 4, limit + 20):
+                break
+        return coverage_rerank_hits(query, source_balanced_hits(raw_hits, max(limit * 2, limit)), limit)
 
     def search_candidate_indexes(self, query_tokens: list[str], use_dense: bool = False) -> Iterable[int]:
         if use_dense or not inverted_index_enabled() or not self.token_postings:
@@ -1816,6 +1875,20 @@ def search_knowledge_candidates(query: str) -> list[KnowledgeHit]:
         return []
     limit = int(os.getenv("LINE_KNOWLEDGE_CANDIDATE_SNIPPETS", "15"))
     excerpt_chars = int(os.getenv("LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS", "700"))
+    fast_path_enabled = os.getenv("LINE_LLM_WIKI_FAST_PATH_ENABLED", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+    if fast_path_enabled:
+        min_hits = max(1, int(os.getenv("LINE_LLM_WIKI_FAST_PATH_MIN_HITS", "5")))
+        fast_limit = max(limit, min_hits)
+        fast_hits = kb.search_chunk_pool(query, kb.curated_fast_path_chunks(), limit=fast_limit, excerpt_chars=excerpt_chars)
+        if len(fast_hits) >= min_hits and any(
+            hit.chunk_type in {"llm_wiki_page", "compiled_concept", "compiled_cross_guideline"} for hit in fast_hits
+        ):
+            return fast_hits[:limit]
     return kb.search_multi(query, limit=limit, excerpt_chars=excerpt_chars)
 
 
@@ -2567,7 +2640,7 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
         if compact and key not in seen:
             seen.add(key)
             deduped.append(QueryVariant(variant.label, compact, variant.weight))
-    variant_limit = max(8, int(os.getenv("LINE_KNOWLEDGE_QUERY_VARIANT_LIMIT", "24")))
+    variant_limit = max(1, int(os.getenv("LINE_KNOWLEDGE_QUERY_VARIANT_LIMIT", "8")))
     return deduped[:variant_limit]
 
 
