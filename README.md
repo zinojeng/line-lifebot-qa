@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-wiki-writeback-smoke-v34
+APP_VERSION=2026-05-20-retrieval-failure-loop-v35
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -55,6 +55,8 @@ LINE_RETRIEVAL_QUERY_MAX_CHARS=1400
 LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED=1
 LINE_QUERY_CANDIDATE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-candidates
 LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS=1200
+LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED=1
+LINE_RETRIEVAL_FAILURE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures
 LINE_TIMEOUT=12
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
@@ -88,7 +90,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-wiki-writeback-smoke-v34
+APP_VERSION=2026-05-20-retrieval-failure-loop-v35
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -124,6 +126,8 @@ LINE_WHOLE_SECTION_CONTEXT_ENABLED=0
 LINE_DEBUG_SEARCH_ENABLED=1
 LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED=1
 LINE_QUERY_CANDIDATE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-candidates
+LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED=1
+LINE_RETRIEVAL_FAILURE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures
 ```
 
 The same minimal set is also saved in `zeabur.env.example`.
@@ -440,6 +444,18 @@ For high-value guideline questions, the app can save a review-only Markdown
 candidate under `inbox/query-candidates/` without LINE user IDs. Keep this as a
 staging area; promote to `queries/` only after human review.
 
+When wiki/RAG retrieval still cannot support an answer, the app saves a
+review-only retrieval failure record under `inbox/retrieval-failures/`. Compile
+those failures into a learning-loop report with:
+
+```bash
+python3 scripts/compile_retrieval_failures.py
+```
+
+The report proposes low-risk fixes such as aliases, topic-map routes, MOC links,
+research requests, or query drafts. It does not change clinical thresholds or
+recommendation grades.
+
 The response includes the retrieval query, query variants, required facets,
 candidate hits, selected hits, recursive coverage notes, whole-section context
 notes, and missing facets. If `LINE_DEBUG_TOKEN` is set, include it as the
@@ -581,7 +597,7 @@ The health check should include:
 
 ```json
 {
-  "app_version": "2026-05-20-wiki-writeback-smoke-v34",
+  "app_version": "2026-05-20-retrieval-failure-loop-v35",
   "llm_provider": "gemini",
   "model": "gemini-3.1-flash-lite-preview",
   "features": {

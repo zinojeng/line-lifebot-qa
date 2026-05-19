@@ -100,7 +100,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-wiki-writeback-smoke-v34")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-retrieval-failure-loop-v35")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -197,6 +197,16 @@ LINE_QUERY_CANDIDATE_DIR = os.getenv(
 )
 LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS = int(os.getenv("LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS", "1200"))
 LINE_QUERY_CANDIDATE_TIMEZONE = timezone(timedelta(hours=8))
+LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED = os.getenv("LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_RETRIEVAL_FAILURE_DIR = os.getenv(
+    "LINE_RETRIEVAL_FAILURE_DIR",
+    "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures",
+)
 
 app = FastAPI(title="LifeBot Fast LINE QA")
 
@@ -886,6 +896,189 @@ def write_query_candidate(
         print(f"query candidate saved: {path}")
     except Exception as exc:
         print(f"query candidate writeback failed: {type(exc).__name__}: {exc}")
+
+
+def retrieval_failure_term_routes(user_text: str) -> list[tuple[str, str]]:
+    lower = user_text.lower()
+    routes: list[tuple[str, str]] = []
+    route_specs = [
+        (r"排糖藥|sglt2|sglt-2|egfr.*20|腎功能.*20", "drugs/sglt2i-egfr-under-20-not-on-dialysis"),
+        (r"glp.?1|glp-1ra|洗腎.*glp|透析.*glp|dialysis.*glp", "drugs/glp1-based-therapy-on-dialysis"),
+        (r"cgm|連續血糖|糖尿病新科技|血糖機|time in range|tir", "concepts/diabetes-technology-cgm-aid"),
+        (r"uacr|albuminuria|白蛋白尿|尿蛋白|dkd|糖尿病腎", "concepts/diabetes-ckd-risk-stratification"),
+        (r"metformin|finerenone|nsmra|a1c.*ckd|洗腎.*a1c|低血糖.*腎", "comparisons/ada-2026-vs-kdigo-2026-diabetes-ckd"),
+        (r"older adults|長者|老人|pregnancy|懷孕|妊娠|steroid|glucocorticoid|住院", "guidelines/ada-standards-of-care-2026"),
+    ]
+    for pattern, route in route_specs:
+        if re.search(pattern, lower):
+            routes.append((pattern, route))
+    return routes
+
+
+def retrieval_failure_analysis(
+    user_text: str,
+    clinical_intent: dict[str, Any] | None,
+    candidates: list[KnowledgeHit],
+    selected_hits: list[KnowledgeHit],
+    retrieval_trace: dict[str, Any],
+    stage: str,
+    gap_text: str = "",
+) -> dict[str, Any]:
+    required = set(required_facets(user_text))
+    required.update(json_list((clinical_intent or {}).get("required_facets")))
+    covered: set[str] = set()
+    for hit in selected_hits or candidates[:5]:
+        covered.update(hit_facets(hit))
+    missing = sorted(required - covered)
+    routes = retrieval_failure_term_routes(user_text)
+
+    failure_types: list[str] = []
+    if not candidates:
+        failure_types.append("no_candidates")
+    if retrieval_trace.get("retrieval_mode") == "fallback_raw":
+        failure_types.append("wiki_fast_path_insufficient")
+    if routes and not candidates:
+        failure_types.append("missing_alias_or_topic_route")
+    elif routes and missing:
+        failure_types.append("weak_alias_or_topic_route")
+    if missing:
+        failure_types.append("missing_required_facets")
+    if candidates and not selected_hits:
+        failure_types.append("retrieval_noise_or_rerank_gap")
+    if stage in {"evidence_review_unanswerable", "verification_unverified"}:
+        failure_types.append("verification_gap")
+    if not failure_types:
+        failure_types.append("answerability_gap")
+
+    suggested_fixes: list[str] = []
+    for _, route in routes:
+        suggested_fixes.append(f"Check or add alias/topic route to `{route}`.")
+    if missing:
+        suggested_fixes.append(f"Add page metadata or source coverage for missing facets: {', '.join(missing)}.")
+    if not candidates:
+        suggested_fixes.append("Create a research request if raw sources also lack coverage.")
+    if candidates and not selected_hits:
+        suggested_fixes.append("Inspect top candidates for retrieval noise; consider a smoke-test case or reranker rule.")
+    if stage in {"evidence_review_unanswerable", "verification_unverified"}:
+        suggested_fixes.append("Verify exact claims against raw ADA/KDIGO Markdown before promoting to a query page.")
+
+    return {
+        "stage": stage,
+        "failure_types": sorted(set(failure_types)),
+        "missing_facets": missing,
+        "candidate_count": len(candidates),
+        "selected_count": len(selected_hits),
+        "retrieval_mode": retrieval_trace.get("retrieval_mode", ""),
+        "retrieval_elapsed_ms": retrieval_trace.get("elapsed_ms", ""),
+        "fallback_reason": retrieval_trace.get("fallback_reason", ""),
+        "matched_routes": sorted(set(route for _, route in routes)),
+        "suggested_fixes": suggested_fixes,
+        "gap_text": gap_text,
+    }
+
+
+def write_retrieval_failure(
+    user_text: str,
+    clinical_intent: dict[str, Any] | None,
+    candidates: list[KnowledgeHit],
+    selected_hits: list[KnowledgeHit],
+    retrieval_trace: dict[str, Any],
+    stage: str,
+    gap_text: str = "",
+) -> None:
+    if not LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED:
+        return
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|09\d{2}[- ]?\d{3}[- ]?\d{3}|[A-Z][12]\d{8}", user_text, flags=re.I):
+        return
+    try:
+        failure_dir = Path(LINE_RETRIEVAL_FAILURE_DIR)
+        failure_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(LINE_QUERY_CANDIDATE_TIMEZONE)
+        question = redacted_query_candidate_text(user_text)
+        digest = hashlib.sha1(f"{stage}:{question}".encode("utf-8", errors="ignore")).hexdigest()[:10]
+        filename = f"{now.date().isoformat()}-{query_candidate_slug(question)}-{stage}-{digest}.md"
+        path = failure_dir / filename
+        if path.exists():
+            return
+        analysis = retrieval_failure_analysis(user_text, clinical_intent, candidates, selected_hits, retrieval_trace, stage, gap_text)
+        hit_lines = []
+        for hit in (selected_hits or candidates)[:8]:
+            hit_lines.append(
+                f"- {getattr(hit, 'chunk_type', '')}: {getattr(hit, 'source_label', '')} / {getattr(hit, 'section', '')}"
+            )
+        intent = clinical_intent or {}
+        content = "\n".join(
+            [
+                "---",
+                f"title: Retrieval Failure - {digest}",
+                f"created: {now.isoformat()}",
+                f"updated: {now.isoformat()}",
+                "type: retrieval-failure",
+                "tags: [retrieval-failure, line, guideline-qa, learning-loop]",
+                "sources:",
+                *[f"  - {line[2:]}" for line in hit_lines[:3]],
+                "evidence_level: local-practice",
+                "clinical_use: workflow",
+                "confidence: uncertain",
+                f"last_verified: {now.date().isoformat()}",
+                "status: open",
+                "obsidian_type: registry",
+                "owner_agent: line-lifebot-qa",
+                "write_policy: review-before-canonical",
+                "---",
+                "",
+                "# Retrieval Failure",
+                "",
+                "## Question",
+                "",
+                question,
+                "",
+                "## Failure Analysis",
+                "",
+                f"- stage: {analysis['stage']}",
+                f"- failure_types: {', '.join(analysis['failure_types'])}",
+                f"- missing_facets: {', '.join(analysis['missing_facets'])}",
+                f"- retrieval_mode: {analysis['retrieval_mode']}",
+                f"- retrieval_elapsed_ms: {analysis['retrieval_elapsed_ms']}",
+                f"- fallback_reason: {analysis['fallback_reason']}",
+                f"- candidate_count: {analysis['candidate_count']}",
+                f"- selected_count: {analysis['selected_count']}",
+                "",
+                "## Clinical Intent",
+                "",
+                f"- clinical_intent: {intent.get('clinical_intent', '')}",
+                f"- question_type: {intent.get('question_type', '')}",
+                f"- required_facets: {', '.join(str(x) for x in intent.get('required_facets', []))}",
+                "",
+                "## Matched Route Candidates",
+                "",
+                *(f"- `{route}`" for route in analysis["matched_routes"]),
+                "",
+                "## Suggested Low-Risk Fixes",
+                "",
+                *(f"- {fix}" for fix in analysis["suggested_fixes"]),
+                "",
+                "## Evidence Seen",
+                "",
+                *(hit_lines or ["- No candidates recorded."]),
+                "",
+                "## Gap Text",
+                "",
+                gap_text or "No explicit gap text recorded.",
+                "",
+                "## Review Decision",
+                "",
+                "- [ ] Add alias/entity",
+                "- [ ] Update topic-map/MOC",
+                "- [ ] Create research-request",
+                "- [ ] Create query page after verification",
+                "- [ ] Discard as out-of-scope or one-off",
+            ]
+        )
+        path.write_text(content + "\n", encoding="utf-8")
+        print(f"retrieval failure saved: {path}")
+    except Exception as exc:
+        print(f"retrieval failure writeback failed: {type(exc).__name__}: {exc}")
 
 
 def extract_gemini_text(payload: dict[str, Any]) -> str:
@@ -1964,6 +2157,15 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
     retrieval_trace = search_knowledge_candidates_with_trace(retrieval_query)
     candidates = list(retrieval_trace.get("hits", []))
     if not candidates:
+        write_retrieval_failure(
+            user_text,
+            clinical_intent,
+            candidates,
+            [],
+            retrieval_trace,
+            "no_candidates",
+            "No candidates returned after wiki fast path and fallback retrieval.",
+        )
         return knowledge_no_answer_text()
 
     selected_hits, rerank_answerable, coverage_gaps = select_guideline_hits(api_key, user_text, candidates, clinical_intent)
@@ -1992,6 +2194,15 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         elif whole_gap:
             coverage_gaps = (coverage_gaps + "；" if coverage_gaps else "") + whole_gap
     if not selected_hits or not rerank_answerable:
+        write_retrieval_failure(
+            user_text,
+            clinical_intent,
+            candidates,
+            selected_hits,
+            retrieval_trace,
+            "insufficient_selected_evidence",
+            coverage_gaps,
+        )
         return knowledge_no_answer_text()
 
     knowledge_text = knowledge_prompt_from_hits(selected_hits)
@@ -2008,6 +2219,15 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             (comparative_threshold_question(user_text) and locally_answerable)
             or answerable_with_available_guideline_evidence(user_text, selected_hits, clinical_intent)
         ):
+            write_retrieval_failure(
+                user_text,
+                clinical_intent,
+                candidates,
+                selected_hits,
+                retrieval_trace,
+                "evidence_review_unanswerable",
+                evidence_review,
+            )
             return knowledge_no_answer_text()
         evidence_review = (
             evidence_review
@@ -2020,6 +2240,15 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             (comparative_threshold_question(user_text) and locally_answerable)
             or answerable_with_available_guideline_evidence(user_text, selected_hits, clinical_intent)
         ):
+            write_retrieval_failure(
+                user_text,
+                clinical_intent,
+                candidates,
+                selected_hits,
+                retrieval_trace,
+                "verification_unverified",
+                long_context_verification,
+            )
             return knowledge_no_answer_text()
     system_text = (
         SYSTEM_PROMPT

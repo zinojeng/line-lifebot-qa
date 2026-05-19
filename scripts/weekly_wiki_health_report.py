@@ -60,11 +60,13 @@ def main() -> int:
     broken_links = []
     stale_pages = []
     low_confidence = []
+    open_query_candidates = []
+    open_retrieval_failures = []
 
     today = date.today()
     for path in pages:
         rel = path.relative_to(root).as_posix()
-        if rel == "reports/weekly-wiki-health.md":
+        if rel in {"reports/weekly-wiki-health.md", "reports/retrieval-failure-analysis.md"}:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         fm = frontmatter(text)
@@ -86,6 +88,10 @@ def main() -> int:
                 broken_links.append(f"{rel} -> {link}")
         if re.search(r"confidence:\s*(low|uncertain)", fm):
             low_confidence.append(rel)
+        if rel.startswith("inbox/query-candidates/") and rel != "inbox/query-candidates/README.md":
+            open_query_candidates.append(rel)
+        if rel.startswith("inbox/retrieval-failures/") and rel != "inbox/retrieval-failures/README.md":
+            open_retrieval_failures.append(rel)
         match = re.search(r"last_verified:\s*(\d{4}-\d{2}-\d{2})", fm)
         if match:
             try:
@@ -111,6 +117,8 @@ def main() -> int:
         f"- Broken links: {len(broken_links)}",
         f"- Stale clinical pages: {len(stale_pages)}",
         f"- Low/uncertain confidence pages: {len(low_confidence)}",
+        f"- Open query candidates: {len(open_query_candidates)}",
+        f"- Open retrieval failures: {len(open_retrieval_failures)}",
         "",
     ]
     buckets = [
@@ -121,6 +129,8 @@ def main() -> int:
         ("Broken Links", broken_links),
         ("Stale Clinical Pages", stale_pages),
         ("Low Or Uncertain Confidence", low_confidence),
+        ("Open Query Candidates", open_query_candidates),
+        ("Open Retrieval Failures", open_retrieval_failures),
     ]
     for title, items in buckets:
         sections.extend([f"## {title}", ""])
