@@ -3296,8 +3296,6 @@ def coverage_rerank_hits(query: str, hits: list[KnowledgeHit], limit: int) -> li
 
 def preferred_source_from_query(query: str) -> str:
     lower = query.lower()
-    if "bone_health" in query_concepts(query, lower):
-        return "ada"
     if "blood_pressure_target" in query_concepts(query, lower):
         return "ada"
     if "kdigo" in lower:
