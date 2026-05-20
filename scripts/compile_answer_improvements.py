@@ -23,7 +23,7 @@ def bullet_value(text: str, label: str) -> str:
 
 
 def review_json(text: str) -> dict[str, object]:
-    review = section(text, "OpenAI Mini Review")
+    review = section(text, "Answer Improvement Review") or section(text, "OpenAI Mini Review")
     match = re.search(r"```json\s*(.*?)\s*```", review, flags=re.S)
     raw = match.group(1) if match else review
     try:

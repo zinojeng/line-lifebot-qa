@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-stable-post-deploy-wiki-sync-v39
+APP_VERSION=2026-05-20-gemini-reviewer-volume-ready-v40
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -59,9 +59,11 @@ LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED=1
 LINE_RETRIEVAL_FAILURE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures
 LINE_ANSWER_IMPROVEMENT_ENABLED=1
 LINE_ANSWER_IMPROVEMENT_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/answer-improvements
-LINE_ANSWER_IMPROVEMENT_MODEL=gpt-5.4-mini
+LINE_ANSWER_IMPROVEMENT_PROVIDER=gemini
+LINE_ANSWER_IMPROVEMENT_MODEL=gemini-3.1-flash-lite-preview
 LINE_ANSWER_IMPROVEMENT_TIMEOUT=18
-OPENAI_API_KEY=...
+# Optional only if LINE_ANSWER_IMPROVEMENT_PROVIDER=openai
+OPENAI_API_KEY=
 OPENAI_CHAT_COMPLETIONS_URL=https://api.openai.com/v1/chat/completions
 LINE_TIMEOUT=12
 LINE_MEMORY_ENABLED=1
@@ -96,7 +98,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-stable-post-deploy-wiki-sync-v39
+APP_VERSION=2026-05-20-gemini-reviewer-volume-ready-v40
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -136,8 +138,8 @@ LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED=1
 LINE_RETRIEVAL_FAILURE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures
 LINE_ANSWER_IMPROVEMENT_ENABLED=1
 LINE_ANSWER_IMPROVEMENT_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/answer-improvements
-LINE_ANSWER_IMPROVEMENT_MODEL=gpt-5.4-mini
-OPENAI_API_KEY=...
+LINE_ANSWER_IMPROVEMENT_PROVIDER=gemini
+LINE_ANSWER_IMPROVEMENT_MODEL=gemini-3.1-flash-lite-preview
 ```
 
 The same minimal set is also saved in `zeabur.env.example`.
@@ -466,13 +468,15 @@ The report proposes low-risk fixes such as aliases, topic-map routes, MOC links,
 research requests, or query drafts. It does not change clinical thresholds or
 recommendation grades.
 
-After a LINE answer is sent, the app can also run a background OpenAI mini
-reviewer. It checks answer completeness, public wording, missing facets, and
-retrieval route issues, then saves a review-only Markdown record under
-`inbox/answer-improvements/`. This is the closed-loop improvement layer: Hermes
-may safely compile repeated patterns into aliases, MOC/topic-map links, smoke
-tests, or research requests, but it must not change clinical recommendations
-without source review.
+After a LINE answer is sent, the app can also run a background answer
+improvement reviewer. By default this uses Gemini through the existing
+`GEMINI_API_KEY`; set `LINE_ANSWER_IMPROVEMENT_PROVIDER=openai` only if you want
+to use OpenAI for this reviewer. It checks answer completeness, public wording,
+missing facets, and retrieval route issues, then saves a review-only Markdown
+record under `inbox/answer-improvements/`. This is the closed-loop improvement
+layer: Hermes may safely compile repeated patterns into aliases,
+MOC/topic-map links, smoke tests, or research requests, but it must not change
+clinical recommendations without source review.
 
 ```bash
 python3 scripts/compile_answer_improvements.py
@@ -502,9 +506,24 @@ python3 scripts/sync_wiki_to_zeabur.py --reload
 
 This uploads the local Obsidian/LLM Wiki to
 `/app/data/wiki/ada-kdigo-diabetes-wiki`, calls `/debug/knowledge/reload`, and
-prints the health summary. The longer-term production fix is to attach a Zeabur
-volume to `/app/data` or `/app/data/wiki` so generated inbox records and synced
-wiki files survive redeploys.
+prints the health summary.
+
+## Zeabur Persistent Volume
+
+The Zeabur CLI available here does not expose a `volume` command, so the
+persistent disk must be attached in the Zeabur web console:
+
+1. Open service `line-lifebot-qa`.
+2. Go to the service's Volumes tab.
+3. Create or attach a volume named `wiki-data`.
+4. Set Mount Directory to `/app/data`.
+5. Redeploy the service.
+6. Run `python3 scripts/post_deploy_zeabur.py --reload` once to seed the mounted
+   volume with the local wiki.
+
+Mounting `/app/data` is preferred over only `/app/data/wiki` because it also
+keeps uploaded guideline markdown and generated wiki inbox records in the same
+persistent data root.
 
 The response includes the retrieval query, query variants, required facets,
 candidate hits, selected hits, recursive coverage notes, whole-section context

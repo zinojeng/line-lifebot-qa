@@ -100,7 +100,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-stable-post-deploy-wiki-sync-v39")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-gemini-reviewer-volume-ready-v40")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -217,7 +217,11 @@ LINE_ANSWER_IMPROVEMENT_DIR = os.getenv(
     "LINE_ANSWER_IMPROVEMENT_DIR",
     "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/answer-improvements",
 )
-LINE_ANSWER_IMPROVEMENT_MODEL = os.getenv("LINE_ANSWER_IMPROVEMENT_MODEL", "gpt-5.4-mini")
+LINE_ANSWER_IMPROVEMENT_PROVIDER = os.getenv("LINE_ANSWER_IMPROVEMENT_PROVIDER", "gemini").strip().lower()
+LINE_ANSWER_IMPROVEMENT_MODEL = os.getenv(
+    "LINE_ANSWER_IMPROVEMENT_MODEL",
+    GEMINI_MODEL if LINE_ANSWER_IMPROVEMENT_PROVIDER == "gemini" else "gpt-5.4-mini",
+)
 LINE_ANSWER_IMPROVEMENT_TIMEOUT = int(os.getenv("LINE_ANSWER_IMPROVEMENT_TIMEOUT", "18"))
 LINE_ANSWER_IMPROVEMENT_MAX_EXCERPT_CHARS = int(os.getenv("LINE_ANSWER_IMPROVEMENT_MAX_EXCERPT_CHARS", "700"))
 
@@ -1100,7 +1104,7 @@ def write_retrieval_failure(
 def answer_improvement_allowed(user_text: str, answer: str) -> bool:
     if not LINE_ANSWER_IMPROVEMENT_ENABLED:
         return False
-    if not os.getenv("OPENAI_API_KEY", "").strip():
+    if not answer_improvement_api_key():
         return False
     if not user_text.strip() or not answer.strip():
         return False
@@ -1115,6 +1119,14 @@ def answer_improvement_allowed(user_text: str, answer: str) -> bool:
             f"{user_text} {answer}".lower(),
         )
     )
+
+
+def answer_improvement_api_key() -> str:
+    if LINE_ANSWER_IMPROVEMENT_PROVIDER == "openai":
+        return os.getenv("OPENAI_API_KEY", "").strip()
+    if LINE_ANSWER_IMPROVEMENT_PROVIDER == "gemini":
+        return os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+    return ""
 
 
 def answer_improvement_hit_lines(selected_hits: list[KnowledgeHit]) -> list[str]:
@@ -1185,7 +1197,7 @@ def build_answer_improvement_review(
             "\n".join(answer_improvement_hit_lines(selected_hits)) or "- No evidence excerpts recorded.",
         ]
     )
-    return call_openai_review_model(answer_improvement_system_prompt(), user_payload)
+    return call_answer_improvement_model(answer_improvement_system_prompt(), user_payload)
 
 
 def write_answer_improvement(
@@ -1222,7 +1234,7 @@ def write_answer_improvement(
                 f"created: {now.isoformat()}",
                 f"updated: {now.isoformat()}",
                 "type: answer-improvement",
-                "tags: [answer-improvement, line, guideline-qa, self-improvement, openai-mini]",
+                f"tags: [answer-improvement, line, guideline-qa, self-improvement, {LINE_ANSWER_IMPROVEMENT_PROVIDER}-reviewer]",
                 "sources:",
                 *[
                     f"  - {getattr(hit, 'source_label', '')} / {getattr(hit, 'section', '')}"
@@ -1234,7 +1246,7 @@ def write_answer_improvement(
                 f"last_verified: {now.date().isoformat()}",
                 "status: open",
                 "obsidian_type: registry",
-                "owner_agent: openai-mini-reviewer",
+                f"owner_agent: {LINE_ANSWER_IMPROVEMENT_PROVIDER}-answer-reviewer",
                 "write_policy: safe-autofix-or-review-before-canonical",
                 f"quality_score: {quality_score}",
                 f"requires_human_or_clinical_review: {str(requires_review).lower()}",
@@ -1268,7 +1280,10 @@ def write_answer_improvement(
                 "",
                 *(evidence_lines or ["- No selected hits recorded."]),
                 "",
-                "## OpenAI Mini Review",
+                "## Answer Improvement Review",
+                "",
+                f"- provider: {LINE_ANSWER_IMPROVEMENT_PROVIDER}",
+                f"- model: {LINE_ANSWER_IMPROVEMENT_MODEL}",
                 "",
                 "```json",
                 json.dumps(review_json, ensure_ascii=False, indent=2) if review_json else review_text,
@@ -1452,6 +1467,34 @@ def extract_openai_text(payload: dict[str, Any]) -> str:
     return "\n".join(parts).strip()
 
 
+def call_gemini_review_model(system_text: str, user_text: str) -> str:
+    api_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        return ""
+    body = {
+        "system_instruction": {"parts": [{"text": system_text}]},
+        "contents": [{"role": "user", "parts": [{"text": user_text}]}],
+        "generationConfig": {
+            "maxOutputTokens": 900,
+            "temperature": 0.1,
+            "responseMimeType": "application/json",
+        },
+    }
+    target_url = f"{GEMINI_API_BASE}/{LINE_ANSWER_IMPROVEMENT_MODEL}:generateContent"
+    request = urllib.request.Request(
+        target_url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "x-goog-api-key": api_key,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=LINE_ANSWER_IMPROVEMENT_TIMEOUT) as response:
+        payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    return extract_gemini_text(payload)
+
+
 def call_openai_review_model(system_text: str, user_text: str) -> str:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
     if not api_key:
@@ -1477,6 +1520,15 @@ def call_openai_review_model(system_text: str, user_text: str) -> str:
     with urllib.request.urlopen(request, timeout=LINE_ANSWER_IMPROVEMENT_TIMEOUT) as response:
         payload = json.loads(response.read().decode("utf-8", errors="replace"))
     return extract_openai_text(payload)
+
+
+def call_answer_improvement_model(system_text: str, user_text: str) -> str:
+    if LINE_ANSWER_IMPROVEMENT_PROVIDER == "openai":
+        return call_openai_review_model(system_text, user_text)
+    if LINE_ANSWER_IMPROVEMENT_PROVIDER == "gemini":
+        return call_gemini_review_model(system_text, user_text)
+    print(f"answer improvement skipped: unsupported provider {LINE_ANSWER_IMPROVEMENT_PROVIDER}")
+    return ""
 
 
 def json_list(value: Any) -> list[str]:
@@ -2644,6 +2696,9 @@ def health() -> dict[str, Any]:
             "long_context_verification": LINE_LONG_CONTEXT_VERIFICATION_ENABLED,
             "parallel_evidence_verification": LINE_PARALLEL_VERIFICATION_ENABLED,
             "debug_search_endpoint": LINE_DEBUG_SEARCH_ENABLED,
+            "answer_improvement_writeback": LINE_ANSWER_IMPROVEMENT_ENABLED,
+            "answer_improvement_provider": LINE_ANSWER_IMPROVEMENT_PROVIDER,
+            "answer_improvement_configured": bool(answer_improvement_api_key()),
             "guideline_strict_grounding_current": True,
             "guideline_query_planning_current": LINE_QUERY_PLANNING_ENABLED,
             "guideline_evidence_review_current": LINE_EVIDENCE_REVIEW_ENABLED,
