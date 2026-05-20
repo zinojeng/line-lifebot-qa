@@ -72,12 +72,12 @@ def make_archive(local_wiki: Path) -> bytes:
         return tmp.read()
 
 
-def post_json(url: str, token: str = "") -> dict[str, object]:
+def post_json(url: str, token: str = "", timeout_seconds: int = 240) -> dict[str, object]:
     headers = {"Content-Type": "application/json"}
     if token:
         headers["x-debug-token"] = token
     request = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=60) as response:
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
         raw = response.read().decode("utf-8", errors="replace")
     try:
         payload = json.loads(raw)
@@ -106,6 +106,7 @@ def sync_wiki(
     reload_url: str,
     health_url: str,
     debug_token: str,
+    reload_timeout: int,
     reload_after: bool,
 ) -> None:
     archive = make_archive(local_wiki)
@@ -140,7 +141,7 @@ def sync_wiki(
 
     if reload_after:
         try:
-            payload = post_json(reload_url, debug_token)
+            payload = post_json(reload_url, debug_token, reload_timeout)
             print("reload=" + json.dumps(payload, ensure_ascii=False)[:2000])
         except Exception as exc:
             print(f"reload_failed={exc}")
@@ -161,6 +162,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reload-url", default=os.getenv("LINEBOT_RELOAD_URL", DEFAULT_RELOAD_URL))
     parser.add_argument("--health-url", default=os.getenv("LINEBOT_HEALTH_URL", DEFAULT_HEALTH_URL))
     parser.add_argument("--debug-token", default=os.getenv("LINE_DEBUG_TOKEN", ""))
+    parser.add_argument("--reload-timeout", type=int, default=int(os.getenv("LINEBOT_RELOAD_TIMEOUT", "240")))
     parser.add_argument("--reload", action="store_true", help="Call /debug/knowledge/reload after syncing.")
     return parser.parse_args()
 
@@ -176,6 +178,7 @@ def main() -> int:
         reload_url=args.reload_url,
         health_url=args.health_url,
         debug_token=args.debug_token,
+        reload_timeout=args.reload_timeout,
         reload_after=args.reload,
     )
     return 0
