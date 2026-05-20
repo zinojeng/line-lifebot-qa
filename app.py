@@ -100,7 +100,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-gemini-reviewer-volume-ready-v40")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-context-followup-evidence-grade-v41")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -1568,8 +1568,112 @@ def clinical_intent_prompt(clinical_intent: dict[str, Any] | None) -> str:
     )
 
 
-def fallback_clinical_intent(user_text: str) -> dict[str, Any]:
-    brain_plan = clinical_search_brain_plan(user_text)
+def contextual_guideline_followup(user_text: str, recent_context: str = "") -> bool:
+    if not recent_context.strip():
+        return False
+    followup = user_text.strip().lower()
+    if len(followup) > 80 and not re.search(r"上述|前面|剛剛|哪些|哪個|證據|等級|grade|strong|recommendation", followup):
+        return False
+    has_followup_cue = bool(
+        re.search(
+            r"上述|前面|剛剛|這些|哪些|哪個|哪一些|證據|等級|證據等級|建議等級|"
+            r"較低|低證據|strong|conditional|recommendation|grade|evidence|recommend",
+            followup,
+            flags=re.I,
+        )
+    )
+    context_scope = f"{recent_context}".lower()
+    has_guideline_context = bool(
+        re.search(
+            r"ada|kdigo|aace|diabetes|糖尿病|ckd|egfr|uacr|sglt|glp|metformin|insulin|finerenone|"
+            r"冠狀動脈|心血管|腎|白蛋白尿|指南|recommendation|證據",
+            context_scope,
+            flags=re.I,
+        )
+    )
+    return has_followup_cue and has_guideline_context
+
+
+def context_search_excerpt(recent_context: str, max_chars: int = 900) -> str:
+    if not recent_context.strip():
+        return ""
+    text = re.sub(r"\s+", " ", recent_context).strip()
+    text = re.sub(r"最近對話脈絡：|以下是同一個 LINE 對話中尚未過期的最近訊息.*?存在。", " ", text)
+    return text[-max_chars:]
+
+
+def evidence_grade_followup(user_text: str, recent_context: str = "") -> bool:
+    haystack = f"{user_text} {recent_context}".lower()
+    return bool(
+        re.search(
+            r"證據等級|建議等級|哪些證據|證據.*較低|較低.*證據|低證據|"
+            r"strong recommendation|conditional recommendation|recommendation grade|evidence grade|grade 1|grade 2|1a|1b|2a|2b|2c",
+            haystack,
+            flags=re.I,
+        )
+    )
+
+
+def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[str, Any]:
+    context_excerpt = context_search_excerpt(recent_context)
+    planning_text = f"{user_text} {context_excerpt}" if contextual_guideline_followup(user_text, recent_context) else user_text
+    brain_plan = clinical_search_brain_plan(planning_text)
+    if evidence_grade_followup(user_text, recent_context):
+        intent = {
+            "clinical_intent": "guideline_evidence_grade_followup",
+            "question_type": "evidence_grade_comparison",
+            "patient_context": [user_text, context_excerpt],
+            "must_retrieve": [
+                "ADA 2026 recommendation grade evidence level",
+                "KDIGO 2026 recommendation strength grade 1 grade 2 evidence quality A B C D",
+                "AACE diabetes guideline evidence level recommendation grade",
+                "SGLT2 inhibitor CKD strong recommendation evidence",
+                "GLP-1 RA ASCVD CKD evidence grade",
+                "metformin CKD eGFR evidence grade",
+                "finerenone albuminuria CKD recommendation evidence",
+                "glycemic target individualized A1C evidence grade",
+            ],
+            "required_facets": ["kidney_context", "medication", "ascvd_context", "treatment"],
+            "concepts": [
+                "recommendation strength",
+                "evidence grade",
+                "SGLT2 inhibitor",
+                "GLP-1 RA",
+                "CKD",
+                "ASCVD",
+                "albuminuria",
+                "AACE",
+                "ADA 2026",
+                "KDIGO 2026",
+            ],
+            "target_chapters": [
+                "ADA S9 pharmacologic approaches",
+                "ADA S10 cardiovascular disease and risk management",
+                "ADA S11 chronic kidney disease",
+                "KDIGO diabetes management in CKD",
+                "AACE diabetes comprehensive care",
+            ],
+            "evidence_targets": [
+                "strong recommendation",
+                "conditional recommendation",
+                "grade 1",
+                "grade 2",
+                "evidence quality A B C D",
+                "expert consensus",
+                "lower certainty evidence",
+            ],
+            "answer_strategy": (
+                "Use the previous clinical scenario from recent context. Separate strong/high-certainty recommendations "
+                "from lower-certainty, conditional, consensus, or individualized recommendations. If exact AACE/KDIGO/ADA "
+                "grade is not present in retrieved evidence, state that limitation rather than inventing a grade."
+            ),
+            "do_not_answer_with": [
+                "out-of-scope refusal for short follow-up",
+                "model general medical knowledge",
+                "invented recommendation grades",
+            ],
+        }
+        return merge_clinical_brain(intent, brain_plan)
     if comparative_threshold_question(user_text):
         intent = {
             "clinical_intent": "advanced_ckd_medication_selection",
@@ -1644,7 +1748,7 @@ def dedupe_preserve(values: list[str]) -> list[str]:
 
 
 def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> dict[str, Any]:
-    fallback = fallback_clinical_intent(user_text)
+    fallback = fallback_clinical_intent(user_text, recent_context)
     if not LINE_QUERY_PLANNING_ENABLED or not api_key:
         return fallback
 
@@ -1662,6 +1766,7 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "若使用者提到 HHNK、HHS、高滲透壓、高血糖高滲透壓、酮酸中毒、酮酸、DKA 或高血糖急症，請理解為 hyperglycemic crises；target_chapters 應包含 ADA S16 Diabetes Care in the Hospital 和 ADA S6；evidence_targets 應包含 DKA/HHS diagnostic criteria、Table 16.1、intravenous fluids、insulin、electrolytes、potassium/osmolality/ketones/pH/bicarbonate、transition to subcutaneous insulin、precipitating cause；avoid_routes 要說不要從 GDM 或一般 outpatient diagnosis criteria 回答。"
         "若使用者提到住院/病房/inpatient/hospitalized 加上類固醇/glucocorticoid/steroid/corticosteroid/prednisone/prednisolone/dexamethasone 與高血糖，請理解為 glucocorticoid-associated inpatient hyperglycemia；target_chapters 應包含 ADA S16 和 ADA S9；evidence_targets 應包含 NPH insulin with prednisone/prednisolone、basal insulin for dexamethasone or continuous glucocorticoids、prandial/correction insulin increases、daily adjustment、POC blood glucose monitoring；required_facets 應包含 hospital_context, steroid_context, treatment。"
         "若使用者提到骨質疏鬆、骨鬆、骨折、骨密度、骨骼健康、osteoporosis、bone health、fracture、BMD、DXA、T-score 或 FRAX，請理解為 diabetes bone health / osteoporosis；target_chapters 應包含 ADA S4 Comprehensive Medical Evaluation；evidence_targets 應包含 recommendations 4.8-4.13b、fracture risk assessment、DXA/BMD monitoring、T-score <= -2.5、T-score -2.0 to -2.5 with additional risk factors、fragility fracture、FRAX、TZD/sulfonylurea fracture risk、hypoglycemia/falls、calcium/vitamin D；required_facets 應包含 bone_health, fracture_risk, treatment；avoid_routes 要說不要只用視網膜、足部、PAD 或 CKD 內容回答，也不要在已檢索到 FRAX/T-score/DXA 時說缺乏這些資訊。"
+        "若本次問題很短，像「哪些證據等級較低」、「哪些是 strong recommendation」、「那證據等級呢」，請使用最近對話脈絡還原上一題的疾病、藥物與指南範圍；question_type 應是 evidence_grade_comparison，required_facets 至少包含 medication, treatment，evidence_targets 應包含 recommendation strength、evidence grade、strong/conditional、grade 1/2、A/B/C/D、expert consensus。不要把這種短 follow-up 判成 out-of-scope。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
         "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
         "answer_strategy 要明確說明：用檢索到的 eGFR 門檻與使用者 eGFR 數值比較，不需要文件逐字出現 exact eGFR 數字。"
@@ -1699,7 +1804,12 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "do_not_answer_with",
     ):
         merged[key] = json_list(merged.get(key))
-    return merge_clinical_brain(merged, clinical_search_brain_plan(user_text))
+    planning_text = (
+        f"{user_text} {context_search_excerpt(recent_context)}"
+        if contextual_guideline_followup(user_text, recent_context)
+        else user_text
+    )
+    return merge_clinical_brain(merged, clinical_search_brain_plan(planning_text))
 
 
 def build_retrieval_query(
@@ -1725,6 +1835,7 @@ def build_retrieval_query(
         "若 concepts 或問題指向 PAD、peripheral artery disease、下肢動脈阻塞、下肢缺血或跛行，請加入 ADA section 10、ADA section 12、PAD、lower-extremity arterial disease、ASCVD、antiplatelet、aspirin、clopidogrel、rivaroxaban、statin、lipid-lowering、blood pressure、smoking cessation、ABI、toe pressure、revascularization、semaglutide、STRIDE、limb outcomes；並避免只搜尋 glucose-lowering medication table。"
         "若問題提到 HHNK、HHS、高滲透壓、高血糖高滲透壓、酮酸中毒、酮酸、DKA 或高血糖急症，請加入 ADA section 16、dc26s016、hyperglycemic crises、DKA、diabetic ketoacidosis、HHS、hyperosmolar hyperglycemic state、diagnostic criteria、Table 16.1、intravenous fluids、insulin、electrolytes、potassium、osmolality、ketones、pH、bicarbonate、transition to subcutaneous insulin、precipitating cause；並避免搜尋 GDM/outpatient diagnosis criteria。"
         "若問題提到住院/病房/inpatient/hospitalized 加上類固醇/glucocorticoid/steroid/corticosteroid/prednisone/prednisolone/dexamethasone 與高血糖，請加入 ADA section 16、dc26s016、glucocorticoid therapy、steroid-induced hyperglycemia、NPH insulin、prednisone、prednisolone、dexamethasone、basal insulin、prandial insulin、correction insulin、point-of-care blood glucose monitoring、ADA section 9、recommendation 9.36、frequent reassessment。"
+        "若本次問題是短 follow-up，詢問證據等級、strong recommendation、conditional recommendation、grade 1/2、A/B/C/D 或哪些證據較低，請從最近對話脈絡帶入上一題的疾病、用藥與指南範圍，並加入 ADA 2026、KDIGO 2026、AACE、recommendation strength、evidence grade、strong recommendation、conditional recommendation、expert consensus、SGLT2 inhibitor、GLP-1 RA、metformin、insulin、finerenone、CKD、ASCVD、albuminuria。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"
     )
@@ -1751,7 +1862,10 @@ def build_retrieval_query(
     search_query = str(data.get("search_query") or "").strip()
     keywords = data.get("keywords") if isinstance(data.get("keywords"), list) else []
     keyword_text = " ".join(str(keyword).strip() for keyword in keywords if str(keyword).strip())
-    combined = " ".join(part for part in [user_text, clinical_intent_text(clinical_intent), search_query, keyword_text] if part).strip()
+    context_excerpt = context_search_excerpt(recent_context) if contextual_guideline_followup(user_text, recent_context) else ""
+    combined = " ".join(
+        part for part in [user_text, context_excerpt, clinical_intent_text(clinical_intent), search_query, keyword_text] if part
+    ).strip()
     return combined[:LINE_RETRIEVAL_QUERY_MAX_CHARS] or user_text
 
 
@@ -2035,6 +2149,11 @@ def guideline_scope_question(user_text: str, clinical_intent: dict[str, Any] | N
             "懷孕",
             "慢性病",
             "照護",
+            "指南",
+            "證據",
+            "證據等級",
+            "建議等級",
+            "建議",
         )
     )
 
@@ -2474,7 +2593,12 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
 
     recent_context = conversation_prompt(line_user_id)
     clinical_intent = build_clinical_intent(api_key, user_text, recent_context)
-    if not guideline_scope_question(user_text, clinical_intent):
+    scope_text = (
+        f"{user_text}\n{recent_context}"
+        if contextual_guideline_followup(user_text, recent_context)
+        else user_text
+    )
+    if not guideline_scope_question(scope_text, clinical_intent):
         return guideline_scope_no_answer_text()
     retrieval_query = build_retrieval_query(api_key, user_text, recent_context, clinical_intent)
     retrieval_trace = search_knowledge_candidates_with_trace(retrieval_query)
