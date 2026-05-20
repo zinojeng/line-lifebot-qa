@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-public-evidence-wording-v37
+APP_VERSION=2026-05-20-post-deploy-sync-answer-improvement-v38
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -57,6 +57,12 @@ LINE_QUERY_CANDIDATE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-cand
 LINE_QUERY_CANDIDATE_MAX_ANSWER_CHARS=1200
 LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED=1
 LINE_RETRIEVAL_FAILURE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures
+LINE_ANSWER_IMPROVEMENT_ENABLED=1
+LINE_ANSWER_IMPROVEMENT_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/answer-improvements
+LINE_ANSWER_IMPROVEMENT_MODEL=gpt-5.4-mini
+LINE_ANSWER_IMPROVEMENT_TIMEOUT=18
+OPENAI_API_KEY=...
+OPENAI_CHAT_COMPLETIONS_URL=https://api.openai.com/v1/chat/completions
 LINE_TIMEOUT=12
 LINE_MEMORY_ENABLED=1
 LINE_CONTEXT_ENABLED=1
@@ -90,7 +96,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-public-evidence-wording-v37
+APP_VERSION=2026-05-20-post-deploy-sync-answer-improvement-v38
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -128,6 +134,10 @@ LINE_QUERY_CANDIDATE_WRITEBACK_ENABLED=1
 LINE_QUERY_CANDIDATE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/query-candidates
 LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED=1
 LINE_RETRIEVAL_FAILURE_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures
+LINE_ANSWER_IMPROVEMENT_ENABLED=1
+LINE_ANSWER_IMPROVEMENT_DIR=/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/answer-improvements
+LINE_ANSWER_IMPROVEMENT_MODEL=gpt-5.4-mini
+OPENAI_API_KEY=...
 ```
 
 The same minimal set is also saved in `zeabur.env.example`.
@@ -455,6 +465,40 @@ python3 scripts/compile_retrieval_failures.py
 The report proposes low-risk fixes such as aliases, topic-map routes, MOC links,
 research requests, or query drafts. It does not change clinical thresholds or
 recommendation grades.
+
+After a LINE answer is sent, the app can also run a background OpenAI mini
+reviewer. It checks answer completeness, public wording, missing facets, and
+retrieval route issues, then saves a review-only Markdown record under
+`inbox/answer-improvements/`. This is the closed-loop improvement layer: Hermes
+may safely compile repeated patterns into aliases, MOC/topic-map links, smoke
+tests, or research requests, but it must not change clinical recommendations
+without source review.
+
+```bash
+python3 scripts/compile_answer_improvements.py
+```
+
+## Post-Deploy Wiki Sync
+
+Zeabur deployments can replace the running container, so `/app/data/wiki` may be
+empty unless a reliable volume is attached. Until the wiki is mounted on a
+persistent volume, run the post-deploy checklist after every push/redeploy:
+
+```bash
+python3 scripts/post_deploy_zeabur.py --reload --smoke
+```
+
+For a faster sync/reload without smoke tests:
+
+```bash
+python3 scripts/sync_wiki_to_zeabur.py --reload
+```
+
+This uploads the local Obsidian/LLM Wiki to
+`/app/data/wiki/ada-kdigo-diabetes-wiki`, calls `/debug/knowledge/reload`, and
+prints the health summary. The longer-term production fix is to attach a Zeabur
+volume to `/app/data` or `/app/data/wiki` so generated inbox records and synced
+wiki files survive redeploys.
 
 The response includes the retrieval query, query variants, required facets,
 candidate hits, selected hits, recursive coverage notes, whole-section context

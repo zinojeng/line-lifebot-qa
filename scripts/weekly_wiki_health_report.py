@@ -62,11 +62,16 @@ def main() -> int:
     low_confidence = []
     open_query_candidates = []
     open_retrieval_failures = []
+    open_answer_improvements = []
 
     today = date.today()
     for path in pages:
         rel = path.relative_to(root).as_posix()
-        if rel in {"reports/weekly-wiki-health.md", "reports/retrieval-failure-analysis.md"}:
+        if rel in {
+            "reports/weekly-wiki-health.md",
+            "reports/retrieval-failure-analysis.md",
+            "reports/answer-improvement-analysis.md",
+        }:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         fm = frontmatter(text)
@@ -92,6 +97,8 @@ def main() -> int:
             open_query_candidates.append(rel)
         if rel.startswith("inbox/retrieval-failures/") and rel != "inbox/retrieval-failures/README.md":
             open_retrieval_failures.append(rel)
+        if rel.startswith("inbox/answer-improvements/") and rel != "inbox/answer-improvements/README.md":
+            open_answer_improvements.append(rel)
         match = re.search(r"last_verified:\s*(\d{4}-\d{2}-\d{2})", fm)
         if match:
             try:
@@ -119,6 +126,7 @@ def main() -> int:
         f"- Low/uncertain confidence pages: {len(low_confidence)}",
         f"- Open query candidates: {len(open_query_candidates)}",
         f"- Open retrieval failures: {len(open_retrieval_failures)}",
+        f"- Open answer improvements: {len(open_answer_improvements)}",
         "",
     ]
     buckets = [
@@ -131,6 +139,7 @@ def main() -> int:
         ("Low Or Uncertain Confidence", low_confidence),
         ("Open Query Candidates", open_query_candidates),
         ("Open Retrieval Failures", open_retrieval_failures),
+        ("Open Answer Improvements", open_answer_improvements),
     ]
     for title, items in buckets:
         sections.extend([f"## {title}", ""])

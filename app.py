@@ -100,7 +100,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-public-evidence-wording-v37")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-post-deploy-sync-answer-improvement-v38")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -207,6 +207,19 @@ LINE_RETRIEVAL_FAILURE_DIR = os.getenv(
     "LINE_RETRIEVAL_FAILURE_DIR",
     "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures",
 )
+LINE_ANSWER_IMPROVEMENT_ENABLED = os.getenv("LINE_ANSWER_IMPROVEMENT_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_ANSWER_IMPROVEMENT_DIR = os.getenv(
+    "LINE_ANSWER_IMPROVEMENT_DIR",
+    "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/answer-improvements",
+)
+LINE_ANSWER_IMPROVEMENT_MODEL = os.getenv("LINE_ANSWER_IMPROVEMENT_MODEL", "gpt-5.4-mini")
+LINE_ANSWER_IMPROVEMENT_TIMEOUT = int(os.getenv("LINE_ANSWER_IMPROVEMENT_TIMEOUT", "18"))
+LINE_ANSWER_IMPROVEMENT_MAX_EXCERPT_CHARS = int(os.getenv("LINE_ANSWER_IMPROVEMENT_MAX_EXCERPT_CHARS", "700"))
 
 app = FastAPI(title="LifeBot Fast LINE QA")
 
@@ -1084,6 +1097,215 @@ def write_retrieval_failure(
         print(f"retrieval failure writeback failed: {type(exc).__name__}: {exc}")
 
 
+def answer_improvement_allowed(user_text: str, answer: str) -> bool:
+    if not LINE_ANSWER_IMPROVEMENT_ENABLED:
+        return False
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        return False
+    if not user_text.strip() or not answer.strip():
+        return False
+    if knowledge_no_answer_text()[:20] in answer:
+        return False
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|09\d{2}[- ]?\d{3}[- ]?\d{3}|[A-Z][12]\d{8}", user_text, flags=re.I):
+        return False
+    return bool(
+        re.search(
+            r"ada|kdigo|ckd|egfr|uacr|dialysis|sglt2|glp|cgm|aid|a1c|骨|骨鬆|骨質疏鬆|"
+            r"糖尿病|腎|洗腎|透析|尿蛋白|白蛋白尿|排糖藥|連續血糖|指引|治療|診斷",
+            f"{user_text} {answer}".lower(),
+        )
+    )
+
+
+def answer_improvement_hit_lines(selected_hits: list[KnowledgeHit]) -> list[str]:
+    lines: list[str] = []
+    for hit in selected_hits[:8]:
+        excerpt = str(getattr(hit, "text", "") or getattr(hit, "excerpt", "") or "")
+        excerpt = re.sub(r"\s+", " ", excerpt).strip()[:LINE_ANSWER_IMPROVEMENT_MAX_EXCERPT_CHARS]
+        lines.append(
+            "\n".join(
+                [
+                    f"- source: {getattr(hit, 'source_label', '')}",
+                    f"  section: {getattr(hit, 'section', '')}",
+                    f"  type: {getattr(hit, 'chunk_type', '')}",
+                    f"  excerpt: {excerpt}",
+                ]
+            )
+        )
+    return lines
+
+
+def answer_improvement_system_prompt() -> str:
+    return (
+        "You are a medical guideline QA improvement auditor for a LINE chatbot. "
+        "Review the answer only against the provided retrieval trace and evidence excerpts. "
+        "Do not add new clinical facts. Identify how the answer, retrieval routing, and LLM Wiki can improve. "
+        "Allowed safe auto-actions: add aliases/entities, add topic-map or MOC links, create query-candidate drafts, "
+        "add smoke-test questions, or create research requests. "
+        "Not allowed without human/source review: changing clinical thresholds, recommendation grades, drug indications, "
+        "contraindications, or promoting draft clinical claims into canonical wiki pages. "
+        "Return strict JSON with keys: quality_score, answer_complete, public_wording_issues, missing_evidence_facets, "
+        "retrieval_route_issues, safe_auto_actions, requires_human_or_clinical_review, proposed_query_page_title, "
+        "proposed_smoke_test, summary."
+    )
+
+
+def build_answer_improvement_review(
+    user_text: str,
+    answer: str,
+    clinical_intent: dict[str, Any] | None,
+    selected_hits: list[KnowledgeHit],
+    retrieval_trace: dict[str, Any],
+) -> str:
+    intent = clinical_intent or {}
+    user_payload = "\n".join(
+        [
+            "Question:",
+            redacted_query_candidate_text(user_text),
+            "",
+            "Answer:",
+            redacted_query_candidate_text(answer)[:2200],
+            "",
+            "Retrieval trace:",
+            json.dumps(
+                {
+                    "retrieval_mode": retrieval_trace.get("retrieval_mode"),
+                    "elapsed_ms": retrieval_trace.get("elapsed_ms"),
+                    "fast_hit_count": retrieval_trace.get("fast_hit_count"),
+                    "fallback_reason": retrieval_trace.get("fallback_reason"),
+                    "clinical_intent": intent.get("clinical_intent"),
+                    "question_type": intent.get("question_type"),
+                    "required_facets": json_list(intent.get("required_facets")),
+                    "concepts": json_list(intent.get("concepts")),
+                },
+                ensure_ascii=False,
+            ),
+            "",
+            "Evidence excerpts:",
+            "\n".join(answer_improvement_hit_lines(selected_hits)) or "- No evidence excerpts recorded.",
+        ]
+    )
+    return call_openai_review_model(answer_improvement_system_prompt(), user_payload)
+
+
+def write_answer_improvement(
+    user_text: str,
+    answer: str,
+    clinical_intent: dict[str, Any] | None,
+    selected_hits: list[KnowledgeHit],
+    retrieval_trace: dict[str, Any],
+) -> None:
+    if not answer_improvement_allowed(user_text, answer):
+        return
+    try:
+        review_text = build_answer_improvement_review(user_text, answer, clinical_intent, selected_hits, retrieval_trace)
+        if not review_text:
+            return
+        review_json = extract_json_object(review_text)
+        improvement_dir = Path(LINE_ANSWER_IMPROVEMENT_DIR)
+        improvement_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(LINE_QUERY_CANDIDATE_TIMEZONE)
+        question = redacted_query_candidate_text(user_text)
+        digest = hashlib.sha1(f"answer-improvement:{question}".encode("utf-8", errors="ignore")).hexdigest()[:10]
+        filename = f"{now.date().isoformat()}-{query_candidate_slug(question)}-improve-{digest}.md"
+        path = improvement_dir / filename
+        if path.exists():
+            return
+        intent = clinical_intent or {}
+        evidence_lines = answer_improvement_hit_lines(selected_hits)
+        quality_score = review_json.get("quality_score", "") if review_json else ""
+        requires_review = review_json.get("requires_human_or_clinical_review", True) if review_json else True
+        content = "\n".join(
+            [
+                "---",
+                f"title: Answer Improvement - {digest}",
+                f"created: {now.isoformat()}",
+                f"updated: {now.isoformat()}",
+                "type: answer-improvement",
+                "tags: [answer-improvement, line, guideline-qa, self-improvement, openai-mini]",
+                "sources:",
+                *[
+                    f"  - {getattr(hit, 'source_label', '')} / {getattr(hit, 'section', '')}"
+                    for hit in selected_hits[:3]
+                ],
+                "evidence_level: local-practice",
+                "clinical_use: workflow",
+                "confidence: uncertain",
+                f"last_verified: {now.date().isoformat()}",
+                "status: open",
+                "obsidian_type: registry",
+                "owner_agent: openai-mini-reviewer",
+                "write_policy: safe-autofix-or-review-before-canonical",
+                f"quality_score: {quality_score}",
+                f"requires_human_or_clinical_review: {str(requires_review).lower()}",
+                "---",
+                "",
+                "# Answer Improvement",
+                "",
+                "## Question",
+                "",
+                question,
+                "",
+                "## Retrieval Trace",
+                "",
+                f"- retrieval_mode: {retrieval_trace.get('retrieval_mode', '')}",
+                f"- retrieval_elapsed_ms: {retrieval_trace.get('elapsed_ms', '')}",
+                f"- fast_hit_count: {retrieval_trace.get('fast_hit_count', '')}",
+                f"- fallback_reason: {retrieval_trace.get('fallback_reason', '')}",
+                "",
+                "## Clinical Intent",
+                "",
+                f"- clinical_intent: {intent.get('clinical_intent', '')}",
+                f"- question_type: {intent.get('question_type', '')}",
+                f"- required_facets: {', '.join(str(x) for x in intent.get('required_facets', []))}",
+                f"- concepts: {', '.join(str(x) for x in intent.get('concepts', []))}",
+                "",
+                "## Answer",
+                "",
+                redacted_query_candidate_text(answer)[:1800],
+                "",
+                "## Evidence Seen",
+                "",
+                *(evidence_lines or ["- No selected hits recorded."]),
+                "",
+                "## OpenAI Mini Review",
+                "",
+                "```json",
+                json.dumps(review_json, ensure_ascii=False, indent=2) if review_json else review_text,
+                "```",
+                "",
+                "## Safe Action Checklist",
+                "",
+                "- [ ] Add aliases/entities only if they map to existing canonical pages",
+                "- [ ] Add topic-map or MOC links",
+                "- [ ] Add or update retrieval smoke-test case",
+                "- [ ] Create research request for true source gap",
+                "- [ ] Do not change clinical thresholds/recommendation grades without source review",
+            ]
+        )
+        path.write_text(content + "\n", encoding="utf-8")
+        print(f"answer improvement saved: {path}")
+    except Exception as exc:
+        print(f"answer improvement writeback failed: {type(exc).__name__}: {exc}")
+
+
+def schedule_answer_improvement(
+    user_text: str,
+    answer: str,
+    clinical_intent: dict[str, Any] | None,
+    selected_hits: list[KnowledgeHit],
+    retrieval_trace: dict[str, Any],
+) -> None:
+    if not answer_improvement_allowed(user_text, answer):
+        return
+    thread = threading.Thread(
+        target=write_answer_improvement,
+        args=(user_text, answer, clinical_intent, list(selected_hits), dict(retrieval_trace)),
+        daemon=True,
+    )
+    thread.start()
+
+
 def extract_gemini_text(payload: dict[str, Any]) -> str:
     parts: list[str] = []
     for candidate in payload.get("candidates", []):
@@ -1212,6 +1434,49 @@ def extract_json_object(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def extract_openai_text(payload: dict[str, Any]) -> str:
+    if isinstance(payload.get("output_text"), str):
+        return str(payload["output_text"]).strip()
+    parts: list[str] = []
+    for choice in payload.get("choices", []):
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and item.get("text"):
+                    parts.append(str(item["text"]))
+    return "\n".join(parts).strip()
+
+
+def call_openai_review_model(system_text: str, user_text: str) -> str:
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return ""
+    body: dict[str, Any] = {
+        "model": LINE_ANSWER_IMPROVEMENT_MODEL,
+        "messages": [
+            {"role": "system", "content": system_text},
+            {"role": "user", "content": user_text},
+        ],
+        "temperature": 0.1,
+        "max_tokens": 900,
+    }
+    request = urllib.request.Request(
+        os.getenv("OPENAI_CHAT_COMPLETIONS_URL", "https://api.openai.com/v1/chat/completions"),
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=LINE_ANSWER_IMPROVEMENT_TIMEOUT) as response:
+        payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    return extract_openai_text(payload)
 
 
 def json_list(value: Any) -> list[str]:
@@ -2278,6 +2543,7 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
         if answer:
             final_answer = remove_trailing_question(answer)[:4900]
             write_query_candidate(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
+            schedule_answer_improvement(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
             return final_answer
         return "目前系統暫時沒有產生完整回覆。若你有明顯不舒服或血糖異常，請先聯絡醫療團隊。"
     except urllib.error.HTTPError as exc:
