@@ -66,8 +66,12 @@ def page_to_case(root: Path, path: Path) -> SyntheticCase | None:
     expected = tuple(dict.fromkeys(term.lower() for term in terms if term and len(term) <= 60))[:6]
     if not expected:
         return None
-    if page_type == "claim":
+    if page_type == "claim" and "ada-kdigo-2026-ckd-cardiorenal-claims" in rel:
         query = f"請根據 ADA/KDIGO 說明 {title}：哪些是 strong recommendation，哪些證據等級較低？"
+        priority = "high"
+    elif page_type == "claim":
+        seed = aliases[0] if aliases else title
+        query = f"請根據 {title} 的 claim cards，整理「{seed}」的重點、適用情境與需要 raw verification 的地方。"
         priority = "high"
     elif page_type == "evidence-card":
         query = f"請整理 {title} 的 recommendation number、grade、適用族群與需要查證處。"
