@@ -2798,6 +2798,21 @@ def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
                 ),
             ]
         )
+    if "bone_health" in concepts:
+        variants.extend(
+            [
+                QueryVariant(
+                    "concept_bone_health_wiki",
+                    f"{query} Diabetes Bone Health and Osteoporosis diabetes-bone-health-osteoporosis 糖尿病骨質疏鬆 糖尿病骨鬆 骨折風險 DXA BMD T-score FRAX ADA 2026 Section 4",
+                    1.0,
+                ),
+                QueryVariant(
+                    "concept_bone_health_ada_s4",
+                    f"{query} ADA section 4 dc26s004 bone health osteoporosis fracture risk DXA BMD T-score FRAX Recommendation 4.8 4.9 4.10 4.11 4.12 4.13a 4.13b calcium vitamin D TZD sulfonylurea hypoglycemia falls",
+                    0.98,
+                ),
+            ]
+        )
     return variants
 
 
@@ -2932,6 +2947,7 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
         ],
         "required_facets": ["bone_health", "fracture_risk", "treatment"],
         "search_queries": [
+            "Diabetes Bone Health and Osteoporosis diabetes-bone-health-osteoporosis 糖尿病骨質疏鬆 糖尿病骨鬆 骨折風險 DXA BMD T-score FRAX",
             "ADA section 4 dc26s004 bone health osteoporosis fracture risk DXA BMD T-score FRAX Recommendation 4.8 4.9 4.10 4.11 4.12 4.13a 4.13b diabetes",
             "diabetes osteoporosis treatment different general population T-score -2.5 -2.0 FRAX fragility fracture thiazolidinediones sulfonylureas hypoglycemia falls calcium vitamin D",
         ],
