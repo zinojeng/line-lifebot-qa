@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-post-deploy-sync-answer-improvement-v38
+APP_VERSION=2026-05-20-stable-post-deploy-wiki-sync-v39
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -96,7 +96,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-post-deploy-sync-answer-improvement-v38
+APP_VERSION=2026-05-20-stable-post-deploy-wiki-sync-v39
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -487,6 +487,12 @@ persistent volume, run the post-deploy checklist after every push/redeploy:
 ```bash
 python3 scripts/post_deploy_zeabur.py --reload --smoke
 ```
+
+The checklist waits for the public health endpoint to report the expected
+`APP_VERSION`, then syncs the wiki, reloads the knowledge cache, and verifies
+that `llm_wiki_files` is at least the local Markdown file count. If the first
+sync hit an old container during Zeabur's rollout window, verification will see
+`llm_wiki_files=0` or a stale app version and automatically sync again.
 
 For a faster sync/reload without smoke tests:
 
