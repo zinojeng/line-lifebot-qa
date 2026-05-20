@@ -126,7 +126,7 @@ CASES = (
     ),
     SmokeCase(
         "evidence-grade-ckd-followup",
-        "58歲第二型糖尿病 eGFR 42 UACR 380 冠狀動脈疾病 metformin basal insulin，ADA 2026 KDIGO 2026 AACE 哪些建議是 strong recommendation，哪些證據等級較低？",
+        "58歲第二型糖尿病 eGFR 42 UACR 380 冠狀動脈疾病 metformin basal insulin，ADA 2026 KDIGO 2026 哪些建議是 strong recommendation，哪些證據等級較低？",
         ("recommendation", "evidence", "grade", "ckd", "sglt2"),
     ),
 )

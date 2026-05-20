@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import html
 import json
+import pickle
 from pathlib import Path
 import hashlib
 import math
@@ -12,19 +13,20 @@ import threading
 from time import monotonic as time_monotonic
 import urllib.error
 import urllib.request
-from typing import Iterable
+from typing import Any, Iterable
 
 
 DEFAULT_KNOWLEDGE_DIR = os.getenv("LINE_KNOWLEDGE_DIR", "/app/data/guidelines")
 DEFAULT_KNOWLEDGE_DIRS = (
     "/app/data,"
-    "/app/data/ada,/app/data/aace,/app/data/kdigo,"
-    "/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines"
+    "/app/data/ada,/app/data/kdigo,"
+    "/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines"
 )
 DEFAULT_EXTRA_KNOWLEDGE_PATHS = ""
 DEFAULT_LLM_WIKI_DIRS = "/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki"
 DEFAULT_KEYWORD_DIR = Path(__file__).resolve().parent / "keywords"
 GEMINI_EMBEDDING_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+KNOWLEDGE_PERSISTENT_CACHE_VERSION = "ada-kdigo-cache-v1"
 
 TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9+-]*|\d+(?:\.\d+)?|[\u4e00-\u9fff]{1,4}")
 HEADING_RE = re.compile(r"^#{1,4}\s+(.+)$")
@@ -708,7 +710,6 @@ class KnowledgeBase:
             priority_queries = (
                 "dc26s010 Lipid Management Recommendation 10.20 LDL cholesterol goal <70 mg/dL high-intensity statin primary prevention diabetes ASCVD risk factors",
                 "dc26s010 Secondary Prevention Recommendation 10.27 LDL cholesterol goal <55 mg/dL high-intensity statin ezetimibe PCSK9 inhibitor ASCVD diabetes",
-                "AACE dyslipidemia algorithm LDL-C goal <70 mg/dL T2D ASCVD risk factor statin PCSK9 bempedoic acid hypertriglyceridemia",
             )
             for priority_query in priority_queries:
                 for rank, hit in enumerate(self.search(priority_query, limit=max(limit, 10), excerpt_chars=excerpt_chars), start=1):
@@ -842,12 +843,10 @@ def knowledge_dirs() -> list[Path]:
                 [
                     str(parent),
                     str(parent / "ada"),
-                    str(parent / "aace"),
                     str(parent / "kdigo"),
                     str(parent / "guidelines"),
                     str(parent / "adaguidelines"),
                     str(parent / "kdigoguidelines"),
-                    str(parent / "aaceguidelines"),
                 ]
             )
 
@@ -865,7 +864,6 @@ def knowledge_dirs() -> list[Path]:
 def standard_guideline_dirs() -> dict[str, str]:
     return {
         "ADA": "/app/data/ada 或 /app/data/adaguidelines",
-        "AACE": "/app/data/aace 或 /app/data/aaceguidelines",
         "KDIGO": "/app/data/kdigo 或 /app/data/kdigoguidelines",
         "Shared": "/app/data 或 /app/data/guidelines",
     }
@@ -905,6 +903,16 @@ def keyword_files() -> list[Path]:
     return deduped
 
 
+def aace_keyword_entries_excluded() -> bool:
+    return os.getenv("LINE_KEYWORD_EXCLUDE_AACE", "1").strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def strip_aace_terms(values: Iterable[str]) -> tuple[str, ...]:
+    if not aace_keyword_entries_excluded():
+        return tuple(str(value).strip() for value in values if str(value).strip())
+    return tuple(str(value).strip() for value in values if str(value).strip() and "aace" not in str(value).lower())
+
+
 def load_keyword_entries() -> list[KeywordEntry]:
     files = keyword_files()
     cache_key = tuple(str(path.resolve()) for path in files)
@@ -925,16 +933,17 @@ def load_keyword_entries() -> list[KeywordEntry]:
             for item in payload.get("entries", []):
                 if not isinstance(item, dict):
                     continue
-                triggers = tuple(str(value).strip() for value in item.get("triggers", []) if str(value).strip())
-                expansions = tuple(str(value).strip() for value in item.get("expansions", []) if str(value).strip())
-                variant_queries = tuple(
-                    str(value).strip() for value in item.get("variant_queries", []) if str(value).strip()
-                )
+                entry_id = str(item.get("id") or "")
+                if aace_keyword_entries_excluded() and entry_id.lower().startswith("aace_"):
+                    continue
+                triggers = strip_aace_terms(str(value) for value in item.get("triggers", []))
+                expansions = strip_aace_terms(str(value) for value in item.get("expansions", []))
+                variant_queries = strip_aace_terms(str(value) for value in item.get("variant_queries", []))
                 if triggers and (expansions or variant_queries):
                     entries.append(
                         KeywordEntry(
                             module=module_name,
-                            entry_id=str(item.get("id") or ""),
+                            entry_id=entry_id,
                             triggers=triggers,
                             expansions=expansions,
                             variant_queries=variant_queries,
@@ -974,7 +983,9 @@ def knowledge_source_files(roots: list[Path], extra_paths: list[Path]) -> list[P
     files = [
         path
         for path in files
-        if is_supported_guideline_file(path) and not path_is_within_any(path, wiki_roots)
+        if is_supported_guideline_file(path)
+        and not path_is_within_any(path, wiki_roots)
+        and not path_has_excluded_dir(path)
     ]
 
     deduped: list[Path] = []
@@ -992,6 +1003,20 @@ def is_supported_guideline_file(path: Path) -> bool:
     if lower.startswith("icon") or "/." in str(path):
         return False
     return path.suffix.lower() == ".md"
+
+
+def excluded_knowledge_dir_names() -> set[str]:
+    raw = os.getenv("LINE_KNOWLEDGE_EXCLUDE_DIR_NAMES", "aace,aaceguidelines")
+    if raw.strip().lower() in {"", "0", "false", "no", "off"}:
+        return set()
+    return {part.strip().lower() for part in re.split(r"[,;\n]+", raw) if part.strip()}
+
+
+def path_has_excluded_dir(path: Path) -> bool:
+    excluded = excluded_knowledge_dir_names()
+    if not excluded:
+        return False
+    return any(part.lower() in excluded for part in path.parts)
 
 
 def path_is_within_any(path: Path, roots: list[Path]) -> bool:
@@ -1338,7 +1363,7 @@ def compiled_concept_evidence_records(chunks: list[KnowledgeChunk]) -> dict[str,
         if chunk.chunk_type not in {"recommendation", "table_row", "section_summary", "text"}:
             continue
         source_key = compiled_source_key(chunk.source_label)
-        if source_key not in {"ADA", "AACE", "KDIGO"}:
+        if source_key not in {"ADA", "KDIGO"}:
             continue
         haystack = f"{chunk.source_label} {chunk.title} {chunk.section} {chunk.chunk_type} {' '.join(chunk.metadata)} {chunk.text} {chunk.parent_text[:900]}".lower()
         facets = hit_facets_from_text(
@@ -1488,7 +1513,7 @@ def compiled_cross_guideline_artifacts(records: dict[str, dict[str, list[Knowled
             if chunk.parent_text
         )
         metadata = structured_metadata(
-            "Compiled ADA/AACE/KDIGO guideline comparison",
+            "Compiled ADA/KDIGO guideline comparison",
             f"Cross-guideline concept: {spec.get('label', concept)}",
             f"Cross-guideline comparison: {concept}",
             "compiled_cross_guideline",
@@ -1510,14 +1535,14 @@ def compiled_cross_guideline_artifacts(records: dict[str, dict[str, list[Knowled
         artifacts.append(
             KnowledgeChunk(
                 f"compiled-cross-guideline-{concept}",
-                "Compiled ADA/AACE/KDIGO guideline comparison",
+                "Compiled ADA/KDIGO guideline comparison",
                 f"Cross-guideline concept: {spec.get('label', concept)}",
                 f"Cross-guideline comparison: {concept}",
                 "compiled_cross_guideline",
                 artifact_text,
                 parent_text,
                 metadata,
-                chunk_tokens("Compiled ADA/AACE/KDIGO guideline comparison", f"Cross-guideline concept: {spec.get('label', concept)}", f"Cross-guideline comparison: {concept}", "compiled_cross_guideline", artifact_text, metadata),
+                chunk_tokens("Compiled ADA/KDIGO guideline comparison", f"Cross-guideline concept: {spec.get('label', concept)}", f"Cross-guideline comparison: {concept}", "compiled_cross_guideline", artifact_text, metadata),
             )
         )
     return artifacts
@@ -1568,7 +1593,7 @@ def compiled_cross_guideline_artifact_text(
         f"Concept label: {spec.get('label', concept)}",
         f"Aliases and patient-language terms: {aliases or 'none'}",
         f"Guidelines with retrieved evidence: {', '.join(sorted(present_sources))}",
-        "Role: Use this to route cross-guideline questions and detect where ADA/AACE/KDIGO each have relevant evidence. It does not resolve conflicts by itself.",
+        "Role: Use this to route cross-guideline questions and detect where ADA/KDIGO each have relevant evidence. It does not resolve conflicts by itself.",
     ]
     for source_key in sorted(present_sources):
         lines.append(f"{source_key} evidence pointers:")
@@ -1629,7 +1654,7 @@ def llm_wiki_artifacts_from_dir(root: Path) -> list[KnowledgeChunk]:
         part.strip().strip("/")
         for part in os.getenv(
             "LINE_LLM_WIKI_INCLUDE_DIRS",
-            "guidelines,concepts,drugs,comparisons,queries,teaching,patient-education",
+            "guidelines,concepts,drugs,comparisons,mocs,queries,teaching,patient-education",
         ).split(",")
         if part.strip()
     )
@@ -1847,6 +1872,134 @@ def clean_cell_text(value: str) -> str:
     return value.strip(" •\t\r\n")
 
 
+def persistent_knowledge_cache_enabled() -> bool:
+    return os.getenv("LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED", "1").strip().lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def persistent_knowledge_cache_path() -> Path:
+    raw = os.getenv("LINE_KNOWLEDGE_PERSISTENT_CACHE", "/app/data/cache/line_lifebot_knowledge_base.pkl")
+    path = Path(raw).expanduser()
+    if "LINE_KNOWLEDGE_PERSISTENT_CACHE" not in os.environ and not Path("/app/data").exists():
+        return Path("/tmp/line_lifebot_knowledge_base.pkl")
+    return path
+
+
+def file_signature(path: Path) -> dict[str, object]:
+    try:
+        stat = path.stat()
+        resolved = str(path.resolve())
+        return {"path": resolved, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    except OSError:
+        return {"path": str(path), "missing": True}
+
+
+def llm_wiki_cache_files() -> list[Path]:
+    include_dirs = tuple(
+        part.strip().strip("/")
+        for part in os.getenv(
+            "LINE_LLM_WIKI_INCLUDE_DIRS",
+            "guidelines,concepts,drugs,comparisons,mocs,queries,teaching,patient-education",
+        ).split(",")
+        if part.strip()
+    )
+    files: list[Path] = []
+    for root in llm_wiki_existing_dirs():
+        for path in sorted(root.rglob("*.md")):
+            if not path.is_file() or path.name.lower().startswith("icon"):
+                continue
+            try:
+                relative = path.relative_to(root)
+            except ValueError:
+                continue
+            parts = relative.parts
+            if not parts or parts[0] in {"raw", ".obsidian"}:
+                continue
+            if path.name in {"SCHEMA.md", "index.md", "log.md"}:
+                continue
+            if include_dirs and parts[0] not in include_dirs:
+                continue
+            files.append(path)
+    return files
+
+
+def persistent_knowledge_cache_key(
+    roots: list[Path],
+    extras: list[Path],
+    chunk_chars: int,
+) -> dict[str, object]:
+    source_files = knowledge_source_files(roots, extras)
+    wiki_files = llm_wiki_cache_files() if llm_wiki_enabled() else []
+    keyword_config_files = keyword_files()
+    env_keys = (
+        "LINE_COMPILED_KNOWLEDGE_ENABLED",
+        "LINE_COMPILED_CROSS_GUIDELINE_ENABLED",
+        "LINE_COMPILED_ARTIFACT_MAX_PER_SECTION",
+        "LINE_COMPILED_CONCEPT_MAX_EVIDENCE",
+        "LINE_KNOWLEDGE_VECTOR_DIM",
+        "LINE_KNOWLEDGE_PARENT_CONTEXT_CHARS",
+        "LINE_KNOWLEDGE_EXCLUDE_DIR_NAMES",
+        "LINE_LLM_WIKI_ENABLED",
+        "LINE_LLM_WIKI_FIRST_ENABLED",
+        "LINE_LLM_WIKI_INCLUDE_DIRS",
+        "LINE_LLM_WIKI_PAGE_CHUNK_CHARS",
+        "LINE_DENSE_EMBEDDING_ENABLED",
+        "LINE_DENSE_EMBEDDING_PROVIDER",
+        "LINE_DENSE_EMBEDDING_MODEL",
+        "LINE_KEYWORD_EXCLUDE_AACE",
+    )
+    return {
+        "schema": KNOWLEDGE_PERSISTENT_CACHE_VERSION,
+        "code": file_signature(Path(__file__)),
+        "roots": [str(path) for path in roots],
+        "extras": [str(path) for path in extras],
+        "chunk_chars": chunk_chars,
+        "env": {key: os.getenv(key, "") for key in env_keys},
+        "source_files": [file_signature(path) for path in source_files],
+        "wiki_files": [file_signature(path) for path in wiki_files],
+        "keyword_files": [file_signature(path) for path in keyword_config_files],
+    }
+
+
+def load_persistent_knowledge_cache(cache_key: dict[str, object]) -> KnowledgeBase | None:
+    if not persistent_knowledge_cache_enabled():
+        return None
+    path = persistent_knowledge_cache_path()
+    if not path.exists() or not path.is_file():
+        return None
+    try:
+        with path.open("rb") as handle:
+            payload = pickle.load(handle)
+    except (OSError, pickle.PickleError, EOFError, AttributeError, ValueError) as exc:
+        print(f"knowledge persistent cache read failed: {path}: {type(exc).__name__}: {exc}")
+        return None
+    if not isinstance(payload, dict) or payload.get("cache_key") != cache_key:
+        return None
+    kb = payload.get("knowledge_base")
+    if isinstance(kb, KnowledgeBase):
+        return kb
+    return None
+
+
+def write_persistent_knowledge_cache(cache_key: dict[str, object], kb: KnowledgeBase) -> None:
+    if not persistent_knowledge_cache_enabled():
+        return
+    path = persistent_knowledge_cache_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("wb") as handle:
+            pickle.dump({"cache_key": cache_key, "knowledge_base": kb}, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp_path.replace(path)
+    except (OSError, pickle.PickleError) as exc:
+        print(f"knowledge persistent cache write failed: {path}: {type(exc).__name__}: {exc}")
+
+
 def load_knowledge_base() -> KnowledgeBase | None:
     if not knowledge_enabled():
         return None
@@ -1871,14 +2024,22 @@ def load_knowledge_base() -> KnowledgeBase | None:
         int(llm_wiki_first_enabled()),
         os.getenv("LINE_LLM_WIKI_INCLUDE_DIRS", ""),
         os.getenv("LINE_LLM_WIKI_PAGE_CHUNK_CHARS", "3600"),
+        os.getenv("LINE_KNOWLEDGE_EXCLUDE_DIR_NAMES", "aace,aaceguidelines"),
     )
     if _knowledge_cache and _knowledge_cache_key == cache_key:
         return _knowledge_cache
     with _knowledge_lock:
         if _knowledge_cache and _knowledge_cache_key == cache_key:
             return _knowledge_cache
+        persistent_key = persistent_knowledge_cache_key(roots, extras, chunk_chars)
+        cached = load_persistent_knowledge_cache(persistent_key)
+        if cached:
+            _knowledge_cache = cached
+            _knowledge_cache_key = cache_key
+            return _knowledge_cache
         _knowledge_cache = KnowledgeBase(roots, extra_paths=extras, chunk_chars=chunk_chars)
         _knowledge_cache_key = cache_key
+        write_persistent_knowledge_cache(persistent_key, _knowledge_cache)
         return _knowledge_cache
 
 
@@ -2045,7 +2206,7 @@ def knowledge_prompt_from_hits(hits: list[KnowledgeHit]) -> str:
         "嚴格回答規則：只能根據以下內容回答；不要使用模型內建知識、一般醫學常識或推測補完。",
         "若以下內容不足以直接回答使用者問題，請明確說目前已載入指南內容不足，並停止回答，不要改用其他來源補充。",
         "回答方式：先用 1 句話直接回答，再用 2 到 4 個重點整理已載入內容支持的重點；若有藥物限制或 eGFR 門檻，請清楚列出，但不要提供個人化劑量。",
-        "來源標示：回答中請自然標示依據來源，例如「根據 ADA 2026 / KDIGO / AACE」；不要編造未出現在已載入內容中的來源。",
+        "來源標示：回答中請自然標示依據來源，例如「根據 ADA 2026 / KDIGO」；不要編造未出現在已載入內容中的來源。",
         "使用者可見措辭：不要使用內部檢索用語；請改說「根據目前已載入的指南內容」或「知識庫整理」。",
     ]
     for index, hit in enumerate(hits, start=1):
@@ -2141,6 +2302,9 @@ def knowledge_status() -> dict[str, object]:
         "dense_vector_index_chunks": sum(1 for vector in kb.dense_vector_index if vector) if kb else 0,
         "dense_embedding_cache": str(dense_embedding_cache_path()),
         "dense_embedding_error": kb.dense_embedding_error if kb else "",
+        "persistent_cache_enabled": persistent_knowledge_cache_enabled(),
+        "persistent_cache_path": str(persistent_knowledge_cache_path()),
+        "persistent_cache_exists": persistent_knowledge_cache_path().exists(),
         "ontology_tagged_chunks": ontology_tagged_chunks,
         "files": len(kb.source_files) if kb else 0,
         "dir_files": dir_file_count,
@@ -2868,7 +3032,7 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
     },
     "lipid_target": {
         "concepts": ["lipid management", "LDL cholesterol goal", "statin therapy", "ASCVD risk management"],
-        "target_chapters": ["ADA S10 Cardiovascular Disease and Risk Management", "AACE T2D comprehensive care when relevant"],
+        "target_chapters": ["ADA S10 Cardiovascular Disease and Risk Management"],
         "evidence_targets": [
             "ADA S10 lipid management recommendations",
             "LDL cholesterol / non-HDL / triglyceride context when present",
@@ -2882,7 +3046,6 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
         "required_facets": ["ascvd_context", "treatment", "threshold"],
         "search_queries": [
             "ADA section 10 dc26s010 lipid management LDL cholesterol statin therapy primary prevention secondary prevention ASCVD triglycerides treatment recommendations",
-            "AACE type 2 diabetes comprehensive care dyslipidemia lipid LDL cholesterol statin ASCVD risk management",
         ],
     },
     "retinopathy": {
@@ -3807,16 +3970,12 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 0.12
     if "kdigo" in query_lower:
         adjustment *= 2.6 if "kdigo" in haystack else 0.58
-    if "aace" in query_lower:
-        adjustment *= 2.4 if "aace" in haystack else 0.65
     if re.search(r"\bada\b|american diabetes association|dc26s", query_lower):
         adjustment *= 2.2 if ("ada standards" in haystack or re.search(r"\bdc26s\d+\b", haystack)) else 0.72
     if kidney_query and "kdigo" in haystack:
         adjustment *= float(os.getenv("LINE_KNOWLEDGE_KDIGO_CKD_BOOST", "1.85"))
     if kidney_medication_query and "kdigo" in haystack:
         adjustment *= float(os.getenv("LINE_KNOWLEDGE_KDIGO_CKD_MEDICATION_BOOST", "1.35"))
-    if kidney_medication_query and "aace" in haystack:
-        adjustment *= float(os.getenv("LINE_KNOWLEDGE_AACE_MEDICATION_BOOST", "1.25"))
     if kidney_medication_query and not re.search(r"\b(cgm|continuous glucose|time in range|tir)\b", query_lower) and re.search(
         r"\b(cgm|continuous glucose monitoring|time in range|tir|glucose monitoring terms)\b",
         haystack,
@@ -3959,14 +4118,13 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     if "glp" in query_lower and (
         "dc26s009" in haystack
         or "dc26s011" in haystack
-        or "aace" in haystack
         or "kdigo" in haystack
         or "glp-1" in haystack
         or "glucose-lowering therapy" in haystack
     ):
         adjustment *= 1.6
     if ("藥" in query or "medication" in query_lower or "pharmacologic" in query_lower) and (
-        "aace" in haystack or "dc26s009" in haystack or "pharmacologic" in haystack
+        "dc26s009" in haystack or "pharmacologic" in haystack
     ):
         adjustment *= 1.25
     if ("眼" in query or "視網膜" in query) and ("retinopathy" in haystack or "dc26s012" in haystack):

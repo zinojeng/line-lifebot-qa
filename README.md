@@ -16,7 +16,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-context-followup-evidence-grade-v41
+APP_VERSION=2026-05-20-ada-kdigo-cache-inbox-v42
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -37,7 +37,9 @@ LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,mocs,queries,teaching,patient-education
+LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
+LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
 LINE_LLM_WIKI_FAST_PATH_ENABLED=1
 LINE_LLM_WIKI_FAST_PATH_MIN_HITS=5
@@ -74,7 +76,9 @@ LINE_CONTEXT_TTL_SECONDS=43200
 DATABASE_URL=postgresql://...
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
-LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/aace,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines
+LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines
+LINE_KNOWLEDGE_EXCLUDE_DIR_NAMES=aace,aaceguidelines
+LINE_KEYWORD_EXCLUDE_AACE=1
 LINE_KNOWLEDGE_DIR=/app/data/guidelines
 LINE_KNOWLEDGE_EXTRA_PATHS=0
 LINE_KNOWLEDGE_PARENT_CONTEXT_CHARS=900
@@ -98,7 +102,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-context-followup-evidence-grade-v41
+APP_VERSION=2026-05-20-ada-kdigo-cache-inbox-v42
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -107,7 +111,9 @@ LINE_CONTEXT_ENABLED=1
 LINE_SESSION_SCOPE=user
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
-LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/aace,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines
+LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines
+LINE_KNOWLEDGE_EXCLUDE_DIR_NAMES=aace,aaceguidelines
+LINE_KEYWORD_EXCLUDE_AACE=1
 LINE_KNOWLEDGE_DIR=/app/data/guidelines
 LINE_KNOWLEDGE_EXTRA_PATHS=0
 LINE_QUERY_PLANNING_ENABLED=1
@@ -123,7 +129,9 @@ LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,mocs,queries,teaching,patient-education
+LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
+LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
 LINE_LLM_WIKI_FAST_PATH_ENABLED=1
 LINE_LLM_WIKI_FAST_PATH_MIN_HITS=5
@@ -162,12 +170,10 @@ Default source inside Zeabur/container:
 ```text
 /app/data
 /app/data/ada
-/app/data/aace
 /app/data/kdigo
 /app/data/guidelines
 /app/data/adaguidelines
 /app/data/kdigoguidelines
-/app/data/aaceguidelines
 ```
 
 Recommended LLM Wiki mount inside Zeabur/container:
@@ -185,7 +191,9 @@ Useful settings:
 ```bash
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
-LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/aace,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines
+LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines
+LINE_KNOWLEDGE_EXCLUDE_DIR_NAMES=aace,aaceguidelines
+LINE_KEYWORD_EXCLUDE_AACE=1
 LINE_KNOWLEDGE_DIR=/app/data/guidelines
 LINE_KNOWLEDGE_EXTRA_PATHS=0
 LINE_KNOWLEDGE_CHUNK_CHARS=1800
@@ -193,7 +201,6 @@ LINE_KNOWLEDGE_PARENT_CONTEXT_CHARS=900
 LINE_KNOWLEDGE_SOURCE_MIN_CANDIDATES=2
 LINE_KNOWLEDGE_KDIGO_CKD_BOOST=1.85
 LINE_KNOWLEDGE_KDIGO_CKD_MEDICATION_BOOST=1.35
-LINE_KNOWLEDGE_AACE_MEDICATION_BOOST=1.25
 LINE_KNOWLEDGE_CANDIDATE_SNIPPETS=15
 LINE_KNOWLEDGE_CANDIDATE_EXCERPT_CHARS=700
 LINE_KNOWLEDGE_MAX_SNIPPETS=5
@@ -201,7 +208,9 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,mocs,queries,teaching,patient-education
+LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
+LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
 LINE_KNOWLEDGE_PRELOAD_ENABLED=1
 LINE_HEALTH_FAST_ENABLED=1
@@ -229,16 +238,17 @@ have permission to redistribute them. Recommended deployment:
 1. In Zeabur, create or attach a Volume for this service.
 2. Mount it at `/app/data`.
 3. Prefer splitting guideline Markdown files into three source folders:
-   `/app/data/ada`, `/app/data/aace`, and `/app/data/kdigo`. Legacy folders
-   `/app/data/adaguidelines`, `/app/data/aaceguidelines`, and
-   `/app/data/kdigoguidelines` are still scanned.
+   `/app/data/ada` and `/app/data/kdigo`. Legacy folders
+   `/app/data/adaguidelines` and `/app/data/kdigoguidelines` are still scanned.
 4. Put the curated LLM Wiki at `/app/data/wiki/ada-kdigo-diabetes-wiki`.
 5. Set:
 
 ```bash
 LINE_KNOWLEDGE_ENABLED=1
 LINE_KNOWLEDGE_STRICT=1
-LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/aace,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines,/app/data/aaceguidelines
+LINE_KNOWLEDGE_DIRS=/app/data,/app/data/ada,/app/data/kdigo,/app/data/guidelines,/app/data/adaguidelines,/app/data/kdigoguidelines
+LINE_KNOWLEDGE_EXCLUDE_DIR_NAMES=aace,aaceguidelines
+LINE_KEYWORD_EXCLUDE_AACE=1
 LINE_KNOWLEDGE_EXTRA_PATHS=0
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
@@ -256,8 +266,7 @@ After redeploy, `GET /` should show:
   "extra_files": 0,
   "sources": [
     "ADA Standards of Care in Diabetes 2026",
-    "KDIGO 2024 Clinical Practice Guideline for CKD",
-    "AACE 2026 Consensus Statement: Algorithm for Management of Adults With T2D"
+    "KDIGO 2026 Diabetes and CKD Guideline Update (Public Review Draft)"
   ],
   "llm_wiki_files": 20
 }
@@ -331,10 +340,10 @@ Per message, the flow is:
    and table rows rank independently, but selected hits carry the parent section excerpt so recommendations,
    rationale, table footnotes, and safety limitations are read together.
 7. Merge candidates with source-balanced, coverage-aware, and MMR-style
-   selection so KDIGO/AACE snippets are less likely to be crowded out by repeated
+   selection so KDIGO snippets are less likely to be crowded out by repeated
    ADA chapter snippets.
    CKD/eGFR/UACR/albuminuria questions additionally boost KDIGO candidates, while
-   pharmacologic questions keep AACE/ADA medication context in the candidate set.
+   pharmacologic questions keep ADA medication context in the candidate set.
 8. Retrieve a candidate pool, then ask the configured LLM to rerank only those candidates
    using the clinical intent JSON and decide whether the snippets cover all core
    concepts in the question.
@@ -380,8 +389,8 @@ keywords/ckd_kdigo.json
 keywords/complications_special_populations.json
 ```
 
-The modules cover ADA 2026 chapter routing, AACE 2026 algorithm routing, KDIGO
-chapter/practice-point routing, ADA/AACE diabetes care terms, CKD terms, and
+The modules cover ADA 2026 chapter routing, KDIGO
+chapter/practice-point routing, ADA diabetes care terms, CKD terms, and
 cross-guideline special populations/safety terms. They connect Chinese user
 language with guideline terms such as `dc26s011`, `MASLD`, `MASH`,
 `NAFLD`, `NASH`, `CKD`, `DKD`, `eGFR`, `UACR`, `SGLT2 inhibitor`, `GLP-1 RA`,
@@ -508,6 +517,17 @@ This uploads the local Obsidian/LLM Wiki to
 `/app/data/wiki/ada-kdigo-diabetes-wiki`, calls `/debug/knowledge/reload`, and
 prints the health summary.
 
+To close the learning loop after users have asked questions in LINE, pull the
+remote writeback inbox from the mounted volume into the local Obsidian wiki:
+
+```bash
+python3 scripts/pull_zeabur_wiki_inbox.py
+```
+
+This downloads `inbox/query-candidates`, `inbox/retrieval-failures`, and
+`inbox/answer-improvements`, then regenerates the local failure/improvement and
+weekly health reports.
+
 ## Zeabur Persistent Volume
 
 The Zeabur CLI available here does not expose a `volume` command, so the
@@ -515,7 +535,7 @@ persistent disk must be attached in the Zeabur web console:
 
 1. Open service `line-lifebot-qa`.
 2. Go to the service's Volumes tab.
-3. Create or attach a volume named `wiki-data`.
+3. Create or attach a volume such as `data`.
 4. Set Mount Directory to `/app/data`.
 5. Redeploy the service.
 6. Run `python3 scripts/post_deploy_zeabur.py --reload` once to seed the mounted

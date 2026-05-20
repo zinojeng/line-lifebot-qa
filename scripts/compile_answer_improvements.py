@@ -41,6 +41,10 @@ def list_values(value: object) -> list[str]:
     return []
 
 
+def in_scope_value(value: str) -> bool:
+    return "aace" not in value.lower()
+
+
 def classify_topic(text: str) -> str:
     question = section(text, "Question").lower()
     if re.search(r"骨|骨鬆|骨質疏鬆|osteoporosis|fracture|bone", question):
@@ -85,12 +89,20 @@ def main() -> int:
         except (TypeError, ValueError):
             pass
         for value in list_values(review.get("public_wording_issues")):
+            if not in_scope_value(value):
+                continue
             public_wording[value] += 1
         for value in list_values(review.get("missing_evidence_facets")):
+            if not in_scope_value(value):
+                continue
             missing_facets[value] += 1
         for value in list_values(review.get("retrieval_route_issues")):
+            if not in_scope_value(value):
+                continue
             retrieval_issues[value] += 1
         for value in list_values(review.get("safe_auto_actions")):
+            if not in_scope_value(value):
+                continue
             safe_actions[value] += 1
 
     out = report_dir / "answer-improvement-analysis.md"
