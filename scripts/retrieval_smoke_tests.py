@@ -110,6 +110,11 @@ CASES = (
         ("osteoporosis", "bone health", "fracture", "t-score", "frax"),
     ),
     SmokeCase(
+        "glp1-muscle-sarcopenia",
+        "我54歲使用GLP1減重後，肌肉質量指數 SMI 降低，覺得手握力和腿沒力氣，我會不會肌少症？",
+        ("sarcopenia", "smi", "handgrip", "chair stand", "muscle"),
+    ),
+    SmokeCase(
         "foot-care",
         "糖尿病足部照護和 PAD 風險 ADA 2026 怎麼整理？",
         ("foot", "pad", "ada"),
