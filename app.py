@@ -13,7 +13,9 @@ import json
 import os
 import re
 import sqlite3
+import tarfile
 import threading
+import inspect
 from time import monotonic as time_monotonic
 import urllib.error
 import urllib.request
@@ -102,7 +104,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-21-wiki-ops-ledger-index-v45")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-21-wiki-self-heal-v46")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -180,6 +182,22 @@ LINE_HEALTH_FAST_ENABLED = os.getenv("LINE_HEALTH_FAST_ENABLED", "1").strip().lo
     "off",
 }
 LINE_HEALTH_STATUS_CACHE_SECONDS = int(os.getenv("LINE_HEALTH_STATUS_CACHE_SECONDS", "30"))
+LINE_LLM_WIKI_SELF_HEAL_ENABLED = os.getenv("LINE_LLM_WIKI_SELF_HEAL_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+LINE_LLM_WIKI_SELF_HEAL_ARCHIVE = os.getenv("LINE_LLM_WIKI_SELF_HEAL_ARCHIVE", "deploy/zeabur-llm-wiki.tar")
+LINE_LLM_WIKI_SELF_HEAL_MIN_FILES = int(os.getenv("LINE_LLM_WIKI_SELF_HEAL_MIN_FILES", "20"))
+DEFAULT_LLM_WIKI_DIRS = "/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki"
+LLM_WIKI_SEED_EXCLUDED_ROOTS = {".git", ".obsidian", ".metadata_cache", "inbox", "reports"}
+
+
+def is_metadata_file_name(name: str) -> bool:
+    return name == ".DS_Store" or name.startswith("._") or name == "Icon" or (
+        name.startswith("Icon") and len(name) <= 5
+    )
 LINE_TIMEOUT = int(os.getenv("LINE_TIMEOUT", "12"))
 LINE_MEMORY_ENABLED = os.getenv("LINE_MEMORY_ENABLED", "1").strip() != "0"
 LINE_MEMORY_DB = os.getenv("LINE_MEMORY_DB", "/tmp/line_lifebot_memory.sqlite3")
@@ -240,10 +258,13 @@ _knowledge_preload_seconds = 0.0
 _knowledge_status_cache: dict[str, object] | None = None
 _knowledge_status_cache_at = 0.0
 _knowledge_status_lock = threading.Lock()
+_wiki_self_heal_status: dict[str, object] = {"attempted": False, "restored": False}
+_wiki_self_heal_lock = threading.RLock()
 
 
 @app.on_event("startup")
 def preload_knowledge_on_startup() -> None:
+    self_heal_llm_wiki_if_needed()
     start_knowledge_preload()
 
 
@@ -279,6 +300,233 @@ def memory_backend() -> str:
     if urlparse(url).scheme in {"postgres", "postgresql"}:
         return "postgres"
     return "sqlite"
+
+
+def llm_wiki_dir_candidates() -> list[Path]:
+    raw = os.getenv("LINE_LLM_WIKI_DIRS", DEFAULT_LLM_WIKI_DIRS)
+    paths: list[Path] = []
+    for part in re.split(r"[,;\n]+", raw):
+        value = part.strip()
+        if value and value.lower() not in {"0", "false", "no", "off"}:
+            paths.append(Path(value).expanduser())
+    return paths
+
+
+def first_llm_wiki_dir() -> Path | None:
+    candidates = llm_wiki_dir_candidates()
+    return candidates[0] if candidates else None
+
+
+def llm_wiki_self_heal_target(archive_path: Path) -> tuple[Path | None, set[str]]:
+    candidates = llm_wiki_dir_candidates()
+    if not candidates:
+        return None, set()
+    if not archive_path.exists():
+        return candidates[0], set()
+    archive_tops = tar_top_level_dirs(archive_path)
+    if len(archive_tops) == 1:
+        archive_top = next(iter(archive_tops))
+        for candidate in candidates:
+            if candidate.name == archive_top:
+                return candidate, archive_tops
+    return candidates[0], archive_tops
+
+
+def bundled_wiki_archive_path() -> Path:
+    archive = Path(LINE_LLM_WIKI_SELF_HEAL_ARCHIVE).expanduser()
+    if archive.is_absolute():
+        return archive
+    return Path(__file__).resolve().parent / archive
+
+
+def canonical_wiki_file_count(path: Path) -> int:
+    if not path.exists() or not path.is_dir():
+        return 0
+    count = 0
+    for child in path.rglob("*.md"):
+        if not child.is_file() or is_metadata_file_name(child.name):
+            continue
+        try:
+            relative = child.relative_to(path)
+        except ValueError:
+            continue
+        if relative.parts and relative.parts[0] in LLM_WIKI_SEED_EXCLUDED_ROOTS:
+            continue
+        count += 1
+    return count
+
+
+def tar_top_level_dirs(archive_path: Path) -> set[str]:
+    roots: set[str] = set()
+    with tarfile.open(archive_path, "r:*") as archive:
+        for member in archive.getmembers():
+            parts = Path(member.name).parts
+            if parts:
+                roots.add(parts[0])
+    return roots
+
+
+def seed_archive_markdown_count(archive_path: Path, expected_top_level: str) -> int:
+    count = 0
+    destination = Path("/")
+    with tarfile.open(archive_path, "r:*") as archive:
+        for member in archive.getmembers():
+            member_path = validate_seed_tar_member(
+                member,
+                destination,
+                expected_top_level,
+                check_destination_symlinks=False,
+            )
+            if member_path is not None and member.isfile() and member.name.endswith(".md"):
+                count += 1
+    return count
+
+
+def validate_seed_tar_member(
+    member: tarfile.TarInfo,
+    destination: Path,
+    expected_top_level: str,
+    check_destination_symlinks: bool = True,
+) -> Path | None:
+    if os.path.isabs(member.name) or ".." in Path(member.name).parts:
+        raise RuntimeError(f"unsafe archive path: {member.name}")
+    parts = Path(member.name).parts
+    if not parts or parts[0] != expected_top_level:
+        raise RuntimeError(f"archive top-level mismatch: {member.name}")
+    if is_metadata_file_name(Path(member.name).name):
+        raise RuntimeError(f"archive metadata files are not allowed: {member.name}")
+    if len(parts) > 1 and parts[1] in LLM_WIKI_SEED_EXCLUDED_ROOTS:
+        return None
+    member_path = Path(os.path.abspath(destination / member.name))
+    if destination != member_path and destination not in member_path.parents:
+        raise RuntimeError(f"unsafe archive path: {member.name}")
+    relative_member_path = member_path.relative_to(destination)
+    if check_destination_symlinks:
+        current = destination
+        for part in relative_member_path.parts[:-1]:
+            current = current / part
+            if current.exists() and current.is_symlink():
+                raise RuntimeError(f"destination symlink parent is not allowed: {current.name}")
+    if member.islnk() or member.issym():
+        raise RuntimeError(f"archive links are not allowed: {member.name}")
+    if member.isdev() or member.isfifo():
+        raise RuntimeError(f"archive special files are not allowed: {member.name}")
+    return member_path
+
+
+def safe_extract_tar(archive_path: Path, destination: Path, expected_top_level: str) -> None:
+    destination = destination.resolve()
+    with tarfile.open(archive_path, "r:*") as archive:
+        for member in archive.getmembers():
+            validate_seed_tar_member(member, destination, expected_top_level)
+
+        kwargs: dict[str, object] = {}
+        if "filter" in inspect.signature(archive.extract).parameters:
+            kwargs["filter"] = "data"
+        for member in archive.getmembers():
+            member_path = validate_seed_tar_member(member, destination, expected_top_level)
+            if member_path is None:
+                continue
+            member.uid = 0
+            member.gid = 0
+            member.uname = ""
+            member.gname = ""
+            member.mode = 0o755 if member.isdir() else 0o644
+            if member.isdir():
+                member_path.mkdir(parents=True, exist_ok=True)
+                continue
+            if member_path.exists():
+                continue
+            member_path.parent.mkdir(parents=True, exist_ok=True)
+            archive.extract(member, destination, **kwargs)
+
+
+def set_wiki_self_heal_status(status: dict[str, object]) -> None:
+    global _wiki_self_heal_status
+    with _wiki_self_heal_lock:
+        _wiki_self_heal_status = dict(status)
+
+
+def public_wiki_self_heal_status() -> dict[str, object]:
+    with _wiki_self_heal_lock:
+        status = dict(_wiki_self_heal_status)
+    error_text = str(status.get("error") or "")
+    if "archive not found" in error_text:
+        error_summary = "archive_not_found"
+    elif "top-levels" in error_text or "top-level mismatch" in error_text:
+        error_summary = "archive_top_level_mismatch"
+    elif error_text:
+        error_summary = "self_heal_error"
+    else:
+        error_summary = ""
+    return {
+        "enabled": bool(status.get("enabled", LINE_LLM_WIKI_SELF_HEAL_ENABLED)),
+        "attempted": bool(status.get("attempted", False)),
+        "restored": bool(status.get("restored", False)),
+        "before_files": status.get("before_files", 0),
+        "after_files": status.get("after_files", 0),
+        "had_error": bool(status.get("error")),
+        "error": error_summary,
+    }
+
+
+def self_heal_llm_wiki_if_needed() -> dict[str, object]:
+    with _wiki_self_heal_lock:
+        archive_path = bundled_wiki_archive_path()
+        target, archive_tops = llm_wiki_self_heal_target(archive_path)
+        status: dict[str, object] = {
+            "enabled": LINE_LLM_WIKI_SELF_HEAL_ENABLED,
+            "attempted": False,
+            "restored": False,
+            "target": str(target) if target else "",
+            "archive": str(archive_path),
+            "before_files": 0,
+            "after_files": 0,
+            "error": "",
+        }
+        if not LINE_LLM_WIKI_SELF_HEAL_ENABLED or not target:
+            set_wiki_self_heal_status(status)
+            return status
+
+        before_files = canonical_wiki_file_count(target)
+        status["before_files"] = before_files
+        status["after_files"] = before_files
+
+        if before_files >= LINE_LLM_WIKI_SELF_HEAL_MIN_FILES and not archive_path.exists():
+            set_wiki_self_heal_status(status)
+            return status
+
+        status["attempted"] = True
+        if not archive_path.exists():
+            status["error"] = f"archive not found: {archive_path}"
+            set_wiki_self_heal_status(status)
+            print(f"LLM Wiki self-heal skipped: {status['error']}")
+            return status
+
+        try:
+            if archive_tops != {target.name}:
+                raise RuntimeError(f"archive top-levels {sorted(archive_tops)!r} do not match target {target.name!r}")
+            archive_markdown_files = seed_archive_markdown_count(archive_path, target.name)
+            if before_files >= max(LINE_LLM_WIKI_SELF_HEAL_MIN_FILES, archive_markdown_files):
+                status["attempted"] = False
+                set_wiki_self_heal_status(status)
+                return status
+            target.parent.mkdir(parents=True, exist_ok=True)
+            safe_extract_tar(archive_path, target.parent, target.name)
+            after_files = canonical_wiki_file_count(target)
+            status["after_files"] = after_files
+            status["restored"] = after_files > before_files and after_files >= LINE_LLM_WIKI_SELF_HEAL_MIN_FILES
+            print(
+                "LLM Wiki self-heal "
+                f"target={target} before_files={before_files} after_files={after_files} restored={status['restored']}"
+            )
+        except Exception as exc:
+            status["error"] = f"{type(exc).__name__}: {exc}"
+            status["after_files"] = canonical_wiki_file_count(target)
+            print(f"LLM Wiki self-heal failed: {status['error']}")
+
+        set_wiki_self_heal_status(status)
+        return status
 
 
 def refresh_cached_knowledge_status() -> dict[str, object]:
@@ -321,6 +569,7 @@ def knowledge_preload_worker() -> None:
     global _knowledge_preload_done, _knowledge_preload_error, _knowledge_preload_seconds
     started = time_monotonic()
     try:
+        self_heal_llm_wiki_if_needed()
         load_knowledge_base()
         refresh_cached_knowledge_status()
         _knowledge_preload_error = ""
@@ -2818,6 +3067,8 @@ def health() -> dict[str, Any]:
             "llm_wiki_fast_path": os.getenv("LINE_LLM_WIKI_FAST_PATH_ENABLED", "1").strip().lower()
             not in {"0", "false", "no", "off"},
             "llm_wiki_files": current_knowledge_status.get("llm_wiki_files", 0),
+            "llm_wiki_self_heal": LINE_LLM_WIKI_SELF_HEAL_ENABLED,
+            "llm_wiki_self_heal_status": public_wiki_self_heal_status(),
             "knowledge_preload": LINE_KNOWLEDGE_PRELOAD_ENABLED,
             "fast_health_status": LINE_HEALTH_FAST_ENABLED,
             "long_context_verification": LINE_LONG_CONTEXT_VERIFICATION_ENABLED,
@@ -2949,6 +3200,7 @@ def debug_reload_knowledge(x_debug_token: str = Header(default="")) -> dict[str,
     expected_token = os.getenv("LINE_DEBUG_TOKEN", "").strip()
     if expected_token and not hmac.compare_digest(x_debug_token, expected_token):
         raise HTTPException(status_code=403, detail="invalid debug token")
+    self_heal_llm_wiki_if_needed()
     reset_knowledge_cache()
     status = cached_knowledge_status(force=True)
     return {

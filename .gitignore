@@ -1,11 +1,15 @@
 .venv/
 __pycache__/
 *.pyc
+.metadata_cache/
 .DS_Store
 Icon?
 Icon
 .env
-deploy/
+# Keep deploy outputs ignored except the deterministic LLM Wiki cold-start seed.
+deploy/*
+!deploy/
+!deploy/zeabur-llm-wiki.tar
 .DS_Store
 ._*
 Icon?

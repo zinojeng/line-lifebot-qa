@@ -19,7 +19,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-21-wiki-ops-ledger-index-v45
+APP_VERSION=2026-05-21-wiki-self-heal-v46
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -105,7 +105,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-21-wiki-ops-ledger-index-v45
+APP_VERSION=2026-05-21-wiki-self-heal-v46
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -502,8 +502,52 @@ python3 scripts/compile_answer_improvements.py
 ## Post-Deploy Wiki Sync
 
 Zeabur deployments can replace the running container, so `/app/data/wiki` may be
-empty unless a reliable volume is attached. Until the wiki is mounted on a
-persistent volume, run the post-deploy checklist after every push/redeploy:
+empty unless a reliable volume is attached. The app now has a startup self-heal
+guard for cold-start recovery: when the first configured LLM Wiki directory has
+fewer than `LINE_LLM_WIKI_SELF_HEAL_MIN_FILES` canonical Markdown files, it
+safely restores missing files from the bundled archive at
+`LINE_LLM_WIKI_SELF_HEAL_ARCHIVE` into `/app/data/wiki` before preloading
+knowledge. The guard runs during app startup even if knowledge preloading is
+disabled, and the debug reload endpoint also runs the guard before rebuilding
+the in-memory knowledge cache.
+
+Keep these enabled on Zeabur:
+
+```bash
+LINE_LLM_WIKI_SELF_HEAL_ENABLED=1
+LINE_LLM_WIKI_SELF_HEAL_ARCHIVE=deploy/zeabur-llm-wiki.tar
+LINE_LLM_WIKI_SELF_HEAL_MIN_FILES=20
+```
+
+Relative archive paths are resolved from the directory containing `app.py`, so
+the default points to `/app/deploy/zeabur-llm-wiki.tar` in the Zeabur container. The bundled
+archive intentionally excludes `inbox/` writeback folders, generated reports,
+runtime caches, and SQLite search databases.
+
+Self-heal is not a substitute for syncing the latest Obsidian wiki. It is a
+fallback seed for empty or nearly empty pods, and it does not overwrite existing
+wiki files on the mounted volume.
+
+Rebuild and verify the bundled seed after local wiki changes with:
+
+```bash
+python3 scripts/build_wiki_seed_archive.py
+```
+
+Set `HERMES_LLM_WIKI_DIR=/path/to/ada-kdigo-diabetes-wiki` when running the
+builder from a different workstation or wiki location.
+
+The self-heal target is the configured `LINE_LLM_WIKI_DIRS` entry whose leaf
+directory name matches the archive top-level directory, currently
+`ada-kdigo-diabetes-wiki`. If no configured directory matches, self-heal reports
+`archive_top_level_mismatch` in health status.
+
+Because self-heal never overwrites or deletes existing wiki files, a partially
+synced volume can become a mix of mounted files plus missing files from the
+bundled seed. Use the post-deploy sync script for real wiki updates and cleanup.
+
+The manual post-deploy checklist is still useful after wiki updates, because it
+pushes the newest local Obsidian wiki into the mounted volume:
 
 ```bash
 python3 scripts/post_deploy_zeabur.py --reload --smoke
