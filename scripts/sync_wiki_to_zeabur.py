@@ -126,13 +126,31 @@ def sync_wiki(
         zeabur_exec(service_id, env_id, f"printf %s {shlex.quote(chunk)} >> {shlex.quote(remote_tmp_b64)}")
         print(f"uploaded_chunk={(index // chunk_chars) + 1}")
 
+    preserve_dirs = "inbox/query-candidates inbox/retrieval-failures inbox/answer-improvements"
     remote_cmd = " && ".join(
         [
+            "PRESERVE_DIR=/tmp/ada-kdigo-wiki-preserve-$$",
+            "rm -rf \"$PRESERVE_DIR\" && mkdir -p \"$PRESERVE_DIR\"",
+            (
+                f"for d in {preserve_dirs}; do "
+                f"if [ -d {shlex.quote(remote_wiki)}/$d ]; then "
+                "mkdir -p \"$PRESERVE_DIR/$(dirname \"$d\")\"; "
+                f"cp -a {shlex.quote(remote_wiki)}/$d \"$PRESERVE_DIR/$d\"; "
+                "fi; done"
+            ),
             f"mkdir -p {shlex.quote(remote_parent)}",
             f"base64 -d {shlex.quote(remote_tmp_b64)} > {shlex.quote(remote_tmp_tgz)}",
             f"rm -rf {shlex.quote(remote_wiki)}",
             f"tar -xzf {shlex.quote(remote_tmp_tgz)} -C {shlex.quote(remote_parent)}",
+            (
+                f"for d in {preserve_dirs}; do "
+                "if [ -d \"$PRESERVE_DIR/$d\" ]; then "
+                f"mkdir -p {shlex.quote(remote_wiki)}/$d; "
+                f"cp -a \"$PRESERVE_DIR/$d/.\" {shlex.quote(remote_wiki)}/$d/; "
+                "fi; done"
+            ),
             f"find {shlex.quote(remote_wiki)} \\( -name '._*' -o -name '.DS_Store' \\) -delete",
+            "rm -rf \"$PRESERVE_DIR\"",
             f"rm -f {shlex.quote(remote_tmp_b64)} {shlex.quote(remote_tmp_tgz)}",
             f"printf 'remote_markdown_files=' && find {shlex.quote(remote_wiki)} -name '*.md' | wc -l",
         ]
