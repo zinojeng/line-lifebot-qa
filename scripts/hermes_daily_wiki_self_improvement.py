@@ -60,6 +60,8 @@ def main() -> int:
     args = parser.parse_args()
 
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    index_out = run(["python3", "scripts/build_wiki_index.py"])
+    fts_out = run(["python3", "scripts/wiki_fts_search.py", "--rebuild"])
     audit_out = run(
         [
             "python3",
@@ -81,6 +83,8 @@ def main() -> int:
         "",
         "## Commands Run",
         "",
+        f"- machine-readable wiki index: {index_out or 'ok'}",
+        f"- SQLite FTS search index: {fts_out or 'ok'}",
         f"- self audit: {audit_out or 'ok'}",
         f"- synthetic QA generation: {synthetic_out or 'ok'}",
         f"- source freshness watch: {freshness_out or 'ok'}",
@@ -112,15 +116,16 @@ def main() -> int:
             "",
             "Required workflow:",
             "",
-            "1. Read WIKI_PATH/HERMES.md, SCHEMA.md, index.md, _meta/topic-map.md, _meta/aliases.md, and reports/wiki-self-improvement-audit.md.",
+            "1. Read WIKI_PATH/HERMES.md, SCHEMA.md, index.md, _meta/INDEX.json, _meta/page-registry.json, _meta/claim-registry.json, _meta/topic-map.md, _meta/aliases.md, and reports/wiki-self-improvement-audit.md.",
             "2. For each selected request, search existing wiki pages first with the local wiki-search pattern; avoid duplicate pages.",
-            "3. Read reports/synthetic-qa-candidates.md and reports/source-freshness-watch.md for regression and source-change signals.",
-            "4. Verify clinical facts against raw ADA/KDIGO Markdown before changing thresholds, grades, drug indications, diagnosis cutoffs, or contraindications.",
-            "5. Safe autonomous edits are allowed: aliases, topic-map routes, typed-relationship edges, claim-registry routing, smoke-test suggestions, short draft concept pages with clear sources, and status updates on processed research-request files.",
-            "6. If raw-source verification is incomplete, create or update a draft/proposal and leave the request status open or needs-source.",
-            "7. Do not process more than the selected requests. Do not mass-edit the wiki.",
-            "8. Update log.md with a concise entry if any file is edited.",
-            "9. In the final report, list files read, files edited, requests processed, unresolved evidence gaps, and next queued requests.",
+            "3. Use scripts/wiki_fts_search.py for QMD-like local search when exact title/alias search is not enough.",
+            "4. Read reports/synthetic-qa-candidates.md and reports/source-freshness-watch.md for regression and source-change signals.",
+            "5. Verify clinical facts against raw ADA/KDIGO Markdown before changing thresholds, grades, drug indications, diagnosis cutoffs, or contraindications.",
+            "6. Safe autonomous edits are allowed: aliases, topic-map routes, typed-relationship edges, claim-registry routing, evidence-ledger entries, smoke-test suggestions, short draft concept pages with clear sources, and status updates on processed research-request files.",
+            "7. If raw-source verification is incomplete, create or update a draft/proposal and leave the request status open or needs-source.",
+            "8. Do not process more than the selected requests. Do not mass-edit the wiki.",
+            "9. Update log.md with a concise entry if any file is edited.",
+            "10. In the final report, list files read, files edited, requests processed, unresolved evidence gaps, and next queued requests.",
         ]
     )
     print("\n".join(lines))

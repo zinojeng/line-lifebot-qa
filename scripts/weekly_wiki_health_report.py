@@ -71,6 +71,9 @@ def main() -> int:
             "reports/weekly-wiki-health.md",
             "reports/retrieval-failure-analysis.md",
             "reports/answer-improvement-analysis.md",
+            "reports/source-freshness-watch.md",
+            "reports/synthetic-qa-candidates.md",
+            "reports/wiki-self-improvement-audit.md",
         }:
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
@@ -89,6 +92,8 @@ def main() -> int:
         if len(links) < 2 and not rel.startswith("raw/"):
             weak_links.append(f"{rel}: {len(links)} links")
         for link in links:
+            if rel.startswith("inbox/"):
+                continue
             if not link_exists(root, path, link):
                 broken_links.append(f"{rel} -> {link}")
         if re.search(r"confidence:\s*(low|uncertain)", fm):

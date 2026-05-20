@@ -19,7 +19,7 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-claim-registry-self-improvement-v44
+APP_VERSION=2026-05-21-wiki-ops-ledger-index-v45
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -40,7 +40,7 @@ LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,evidence-ledger,mocs,queries,teaching,patient-education
 LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
 LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
@@ -105,7 +105,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-claim-registry-self-improvement-v44
+APP_VERSION=2026-05-21-wiki-ops-ledger-index-v45
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -132,7 +132,7 @@ LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,evidence-ledger,mocs,queries,teaching,patient-education
 LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
 LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
@@ -211,7 +211,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,evidence-ledger,mocs,queries,teaching,patient-education
 LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
 LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600

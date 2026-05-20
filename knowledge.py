@@ -1658,7 +1658,7 @@ def llm_wiki_artifacts_from_dir(root: Path) -> list[KnowledgeChunk]:
         part.strip().strip("/")
         for part in os.getenv(
             "LINE_LLM_WIKI_INCLUDE_DIRS",
-            "guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education",
+            "guidelines,concepts,drugs,comparisons,evidence-cards,claims,evidence-ledger,mocs,queries,teaching,patient-education",
         ).split(",")
         if part.strip()
     )
@@ -1908,7 +1908,7 @@ def llm_wiki_cache_files() -> list[Path]:
         part.strip().strip("/")
         for part in os.getenv(
             "LINE_LLM_WIKI_INCLUDE_DIRS",
-            "guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education",
+            "guidelines,concepts,drugs,comparisons,evidence-cards,claims,evidence-ledger,mocs,queries,teaching,patient-education",
         ).split(",")
         if part.strip()
     )
