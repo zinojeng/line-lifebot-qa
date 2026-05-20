@@ -132,7 +132,12 @@ CASES = (
     SmokeCase(
         "evidence-grade-ckd-followup",
         "58歲第二型糖尿病 eGFR 42 UACR 380 冠狀動脈疾病 metformin basal insulin，ADA 2026 KDIGO 2026 哪些建議是 strong recommendation，哪些證據等級較低？",
-        ("11.7a", "4.3.1", "1a", "grade a", "lower-certainty"),
+        ("claim registry", "11.7a", "4.3.1", "1a", "grade a", "lower-certainty"),
+    ),
+    SmokeCase(
+        "claim-registry-lower-certainty",
+        "哪些 ADA KDIGO 糖尿病 CKD 建議屬於 lower certainty 或 practice point？",
+        ("claim_id", "grade c", "practice point", "1c", "lower-certainty"),
     ),
 )
 

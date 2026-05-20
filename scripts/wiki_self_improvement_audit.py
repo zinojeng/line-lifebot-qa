@@ -167,6 +167,7 @@ def duplicate_candidates(pages: list[Page]) -> list[str]:
         "drugs/",
         "comparisons/",
         "evidence-cards/",
+        "claims/",
         "guidelines/",
         "teaching/",
         "patient-education/",

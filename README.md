@@ -10,13 +10,16 @@ Obsidian/Google Drive archiving, image generation, and audio generation.
 
 - `GET /` health check
 - `POST /line/webhook` LINE Messaging API webhook
+- `GET /debug/search?q=...` JSON retrieval trace
+- `GET /debug/wiki?q=...` lightweight wiki-search UI for Hermes/Codex/manual debugging
+- `GET /debug/wiki/search?q=...` compact JSON wiki-search result
 
 ## Zeabur Environment Variables
 
 ```bash
 LINE_CHANNEL_SECRET=...
 LINE_CHANNEL_ACCESS_TOKEN=...
-APP_VERSION=2026-05-20-evidence-card-grade-layer-v43
+APP_VERSION=2026-05-20-claim-registry-self-improvement-v44
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -37,7 +40,7 @@ LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,mocs,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education
 LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
 LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
@@ -102,7 +105,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 Minimum variables to add or verify in Zeabur:
 
 ```bash
-APP_VERSION=2026-05-20-evidence-card-grade-layer-v43
+APP_VERSION=2026-05-20-claim-registry-self-improvement-v44
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=...
 GEMINI_MODEL=gemini-3.1-flash-lite-preview
@@ -129,7 +132,7 @@ LINE_COMPILED_CROSS_GUIDELINE_ENABLED=1
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,mocs,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education
 LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
 LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
@@ -208,7 +211,7 @@ LINE_KNOWLEDGE_EXCERPT_CHARS=900
 LINE_LLM_WIKI_ENABLED=1
 LINE_LLM_WIKI_FIRST_ENABLED=1
 LINE_LLM_WIKI_DIRS=/app/data/wiki/ada-kdigo-diabetes-wiki,/app/data/llm-wiki,/app/wiki
-LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,mocs,queries,teaching,patient-education
+LINE_LLM_WIKI_INCLUDE_DIRS=guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education
 LINE_KNOWLEDGE_PERSISTENT_CACHE_ENABLED=1
 LINE_KNOWLEDGE_PERSISTENT_CACHE=/app/data/cache/line_lifebot_knowledge_base.pkl
 LINE_LLM_WIKI_PAGE_CHUNK_CHARS=3600
@@ -428,6 +431,11 @@ Use `/debug/search` to inspect why a question can or cannot be answered:
 /debug/search?q=糖尿病的新科技——連續血糖監測，適用哪些病人呢？
 /debug/search?q=...&llm=true
 ```
+
+Use `/debug/wiki?q=...` when you want a simple browser table of the same wiki-first
+retrieval candidates. This is a small KnowDB-like map view for checking whether
+the answer path is going through compiled wiki pages, claim registries, or raw
+fallback.
 
 The response includes retrieval observability fields:
 

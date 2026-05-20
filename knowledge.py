@@ -60,6 +60,10 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "高血糖高滲透壓": ("HHS", "hyperosmolar hyperglycemic state", "hyperglycemic hyperosmolar state", "hyperglycemic crises", "serum osmolality", "intravenous fluids"),
     "處理": ("treatment", "management", "recommendation", "action", "recheck", "repeat"),
     "治療": ("treatment", "therapy", "management", "recommendation"),
+    "證據等級": ("evidence grade", "recommendation grade", "recommendation strength", "strong recommendation", "lower certainty", "claim registry"),
+    "建議等級": ("recommendation grade", "recommendation strength", "strong recommendation", "GRADE", "claim registry"),
+    "哪些證據等級較低": ("lower certainty evidence", "Grade C", "1C", "practice point", "claim_id", "claim registry"),
+    "哪些是 strong recommendation": ("strong recommendation", "Grade A", "1A", "claim registry"),
     "控制": ("goal", "target", "glycemic goals", "A1C", "blood glucose", "CGM", "BGM", "time in range"),
     "目標": ("goal", "target", "glycemic goals", "A1C goal", "glucose target", "time in range"),
     "血糖控制": ("glycemic goals", "glycemic management", "A1C", "CGM", "BGM", "time in range"),
@@ -1654,7 +1658,7 @@ def llm_wiki_artifacts_from_dir(root: Path) -> list[KnowledgeChunk]:
         part.strip().strip("/")
         for part in os.getenv(
             "LINE_LLM_WIKI_INCLUDE_DIRS",
-            "guidelines,concepts,drugs,comparisons,evidence-cards,mocs,queries,teaching,patient-education",
+            "guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education",
         ).split(",")
         if part.strip()
     )
@@ -1904,7 +1908,7 @@ def llm_wiki_cache_files() -> list[Path]:
         part.strip().strip("/")
         for part in os.getenv(
             "LINE_LLM_WIKI_INCLUDE_DIRS",
-            "guidelines,concepts,drugs,comparisons,evidence-cards,mocs,queries,teaching,patient-education",
+            "guidelines,concepts,drugs,comparisons,evidence-cards,claims,mocs,queries,teaching,patient-education",
         ).split(",")
         if part.strip()
     )
@@ -3245,6 +3249,22 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
         term in lower for term in ("staging", "stage", "severity", "classification", "mild", "moderate", "severe")
     ):
         concepts.add("staging")
+    if any(term in query for term in ("證據等級", "建議等級", "證據較低", "哪些證據", "哪些建議")) or any(
+        term in lower
+        for term in (
+            "evidence grade",
+            "recommendation grade",
+            "recommendation strength",
+            "strong recommendation",
+            "lower certainty",
+            "grade a",
+            "grade b",
+            "grade c",
+            "practice point",
+            "claim registry",
+        )
+    ):
+        concepts.add("evidence_grade")
     if any(term in query for term in ("治療", "處理", "怎麼辦", "用藥", "手術", "雷射", "注射")) or any(
         term in lower for term in ("treatment", "therapy", "intervention", "anti-vegf", "photocoagulation", "vitrectomy")
     ):
@@ -3854,6 +3874,7 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     blood_pressure_target_query = "blood_pressure_target" in concepts
     lipid_target_query = "lipid_target" in concepts
     bone_health_query = "bone_health" in concepts
+    evidence_grade_query = "evidence_grade" in concepts
 
     if chunk.chunk_type == "table_row":
         adjustment *= 1.25
@@ -3882,6 +3903,14 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 0.05
     if re.search(r"\b(reference|references|acknowledg|appendix)\b", haystack):
         adjustment *= 0.35
+    if evidence_grade_query and "claims/ada-kdigo-2026-ckd-cardiorenal-claims" in haystack:
+        adjustment *= 900.0
+    if evidence_grade_query and "ada-kdigo-2026-ckd-cardiorenal-claim-registry" in haystack:
+        adjustment *= 600.0
+    if evidence_grade_query and "evidence-cards/ada-kdigo-2026-ckd-cardiorenal-recommendation-grades" in haystack:
+        adjustment *= 150.0
+    if evidence_grade_query and re.search(r"\b(claim_id|lower-certainty|lower certainty|practice point|grade c|1c|strong recommendation|recommendation grade)\b|哪些證據等級較低|哪些是 strong recommendation", haystack):
+        adjustment *= 12.0
     if bone_health_query and re.search(
         r"\b(osteoporosis|bone health|fracture risk|fragility fracture|bone mineral density|bmd|dxa|t-score|frax|calcium|vitamin d|bisphosphonate|denosumab|romosozumab|thiazolidinedione|sulfonylurea)\b|骨質疏鬆|骨鬆|骨折|骨密度|骨骼",
         haystack,

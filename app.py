@@ -6,6 +6,7 @@ import concurrent.futures
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import html
 import hashlib
 import hmac
 import json
@@ -20,6 +21,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 
 try:
     from knowledge import (
@@ -100,7 +102,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-evidence-card-grade-layer-v43")
+APP_VERSION = os.getenv("APP_VERSION", "2026-05-20-claim-registry-self-improvement-v44")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -2807,6 +2809,10 @@ def health() -> dict[str, Any]:
             "local_hashed_vector_index": True,
             "inverted_index_retrieval": True,
             "compiled_guideline_artifacts": bool(current_knowledge_status.get("compiled_knowledge_enabled")),
+            "claim_registry_retrieval": True,
+            "synthetic_qa_self_improvement": True,
+            "source_freshness_watch": True,
+            "debug_wiki_search_ui": True,
             "llm_wiki_first": bool(current_knowledge_status.get("llm_wiki_enabled"))
             and bool(current_knowledge_status.get("llm_wiki_first_enabled")),
             "llm_wiki_fast_path": os.getenv("LINE_LLM_WIKI_FAST_PATH_ENABLED", "1").strip().lower()
@@ -2852,6 +2858,88 @@ def debug_search(q: str = "", llm: bool = False, x_debug_token: str = Header(def
         f"query={query[:120]!r}"
     )
     return trace
+
+
+@app.get("/debug/wiki/search")
+def debug_wiki_search(q: str = "", x_debug_token: str = Header(default="")) -> dict[str, Any]:
+    if not LINE_DEBUG_SEARCH_ENABLED:
+        raise HTTPException(status_code=404, detail="debug search disabled")
+    expected_token = os.getenv("LINE_DEBUG_TOKEN", "").strip()
+    if expected_token and not hmac.compare_digest(x_debug_token, expected_token):
+        raise HTTPException(status_code=403, detail="invalid debug token")
+    query = q.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail="missing q")
+    trace = debug_search_trace(query, use_llm=False)
+    return {
+        "ok": True,
+        "app_version": APP_VERSION,
+        "query": query,
+        "retrieval_mode": trace.get("retrieval_mode"),
+        "elapsed_ms": trace.get("elapsed_ms"),
+        "candidate_count": trace.get("candidate_count"),
+        "candidates": trace.get("candidates", [])[:LINE_DEBUG_SEARCH_MAX_HITS],
+    }
+
+
+@app.get("/debug/wiki", response_class=HTMLResponse)
+def debug_wiki_page(q: str = "", x_debug_token: str = Header(default="")) -> str:
+    if not LINE_DEBUG_SEARCH_ENABLED:
+        raise HTTPException(status_code=404, detail="debug search disabled")
+    expected_token = os.getenv("LINE_DEBUG_TOKEN", "").strip()
+    if expected_token and not hmac.compare_digest(x_debug_token, expected_token):
+        raise HTTPException(status_code=403, detail="invalid debug token")
+    query = q.strip()
+    rows = ""
+    meta = ""
+    if query:
+        trace = debug_search_trace(query, use_llm=False)
+        meta = (
+            f"<p><strong>mode</strong>: {html.escape(str(trace.get('retrieval_mode')))} "
+            f"<strong>elapsed_ms</strong>: {html.escape(str(trace.get('elapsed_ms')))} "
+            f"<strong>candidates</strong>: {html.escape(str(trace.get('candidate_count')))}</p>"
+        )
+        for hit in trace.get("candidates", [])[:LINE_DEBUG_SEARCH_MAX_HITS]:
+            rows += (
+                "<tr>"
+                f"<td>{html.escape(str(hit.get('source', '')))}</td>"
+                f"<td>{html.escape(str(hit.get('title', '')))}</td>"
+                f"<td>{html.escape(str(hit.get('section', '')))}</td>"
+                f"<td>{html.escape(str(hit.get('chunk_type', '')))}</td>"
+                f"<td>{html.escape(str(hit.get('excerpt', ''))[:900])}</td>"
+                "</tr>"
+            )
+    value = html.escape(query)
+    return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LifeBot Wiki Search</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 24px; line-height: 1.5; }}
+    form {{ display: flex; gap: 8px; margin-bottom: 16px; }}
+    input {{ flex: 1; padding: 10px; font-size: 16px; }}
+    button {{ padding: 10px 14px; }}
+    table {{ border-collapse: collapse; width: 100%; font-size: 14px; }}
+    th, td {{ border: 1px solid #ddd; padding: 8px; vertical-align: top; }}
+    th {{ background: #f4f4f4; text-align: left; }}
+    td:nth-child(5) {{ min-width: 360px; }}
+  </style>
+</head>
+<body>
+  <h1>LifeBot Wiki Search</h1>
+  <form method="get" action="/debug/wiki">
+    <input name="q" value="{value}" placeholder="例如：哪些證據等級較低？">
+    <button type="submit">Search</button>
+  </form>
+  {meta}
+  <table>
+    <thead><tr><th>Source</th><th>Title</th><th>Section</th><th>Type</th><th>Excerpt</th></tr></thead>
+    <tbody>{rows}</tbody>
+  </table>
+</body>
+</html>"""
 
 
 @app.post("/debug/knowledge/reload")

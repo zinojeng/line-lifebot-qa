@@ -69,6 +69,8 @@ def main() -> int:
             str(args.audit_request_limit),
         ]
     )
+    synthetic_out = run(["python3", "scripts/generate_synthetic_qa.py"])
+    freshness_out = run(["python3", "scripts/source_freshness_watch.py", "--no-network"])
     health_out = run(["python3", "scripts/weekly_wiki_health_report.py"])
     selected = open_research_requests(args.request_limit)
 
@@ -80,6 +82,8 @@ def main() -> int:
         "## Commands Run",
         "",
         f"- self audit: {audit_out or 'ok'}",
+        f"- synthetic QA generation: {synthetic_out or 'ok'}",
+        f"- source freshness watch: {freshness_out or 'ok'}",
         f"- health report: {health_out or 'ok'}",
         "",
         "## Selected Open Research Requests",
@@ -110,12 +114,13 @@ def main() -> int:
             "",
             "1. Read WIKI_PATH/HERMES.md, SCHEMA.md, index.md, _meta/topic-map.md, _meta/aliases.md, and reports/wiki-self-improvement-audit.md.",
             "2. For each selected request, search existing wiki pages first with the local wiki-search pattern; avoid duplicate pages.",
-            "3. Verify clinical facts against raw ADA/KDIGO Markdown before changing thresholds, grades, drug indications, diagnosis cutoffs, or contraindications.",
-            "4. Safe autonomous edits are allowed: aliases, topic-map routes, smoke-test suggestions, short draft concept pages with clear sources, and status updates on processed research-request files.",
-            "5. If raw-source verification is incomplete, create or update a draft/proposal and leave the request status open or needs-source.",
-            "6. Do not process more than the selected requests. Do not mass-edit the wiki.",
-            "7. Update log.md with a concise entry if any file is edited.",
-            "8. In the final report, list files read, files edited, requests processed, unresolved evidence gaps, and next queued requests.",
+            "3. Read reports/synthetic-qa-candidates.md and reports/source-freshness-watch.md for regression and source-change signals.",
+            "4. Verify clinical facts against raw ADA/KDIGO Markdown before changing thresholds, grades, drug indications, diagnosis cutoffs, or contraindications.",
+            "5. Safe autonomous edits are allowed: aliases, topic-map routes, typed-relationship edges, claim-registry routing, smoke-test suggestions, short draft concept pages with clear sources, and status updates on processed research-request files.",
+            "6. If raw-source verification is incomplete, create or update a draft/proposal and leave the request status open or needs-source.",
+            "7. Do not process more than the selected requests. Do not mass-edit the wiki.",
+            "8. Update log.md with a concise entry if any file is edited.",
+            "9. In the final report, list files read, files edited, requests processed, unresolved evidence gaps, and next queued requests.",
         ]
     )
     print("\n".join(lines))
