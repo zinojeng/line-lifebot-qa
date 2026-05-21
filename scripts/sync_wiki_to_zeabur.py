@@ -182,7 +182,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--remote-wiki", default=os.getenv("REMOTE_WIKI_PATH", DEFAULT_REMOTE_WIKI))
     parser.add_argument("--service-id", default=os.getenv("ZEABUR_SERVICE_ID", DEFAULT_SERVICE_ID))
     parser.add_argument("--env-id", default=os.getenv("ZEABUR_ENV_ID", DEFAULT_ENV_ID))
-    parser.add_argument("--chunk-chars", type=int, default=int(os.getenv("ZEABUR_SYNC_CHUNK_CHARS", "18000")))
+    parser.add_argument("--chunk-chars", type=int, default=int(os.getenv("ZEABUR_SYNC_CHUNK_CHARS", "3000")))
     parser.add_argument("--reload-url", default=os.getenv("LINEBOT_RELOAD_URL", DEFAULT_RELOAD_URL))
     parser.add_argument("--health-url", default=os.getenv("LINEBOT_HEALTH_URL", DEFAULT_HEALTH_URL))
     parser.add_argument("--debug-token", default=os.getenv("LINE_DEBUG_TOKEN", ""))
