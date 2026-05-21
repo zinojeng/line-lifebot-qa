@@ -30,15 +30,32 @@ def compile_all(wiki: Path) -> None:
     run(py("source_freshness_watch.py", "--wiki", str(wiki), "--no-network"))
 
 
-def health_check(wiki: Path) -> None:
-    run(py("wiki_self_improvement_audit.py", "--wiki", str(wiki), "--write-requests", "--request-limit", "4"))
+def health_check(wiki: Path, audit_request_limit: int) -> None:
+    run(
+        py(
+            "wiki_self_improvement_audit.py",
+            "--wiki",
+            str(wiki),
+            "--write-requests",
+            "--request-limit",
+            str(audit_request_limit),
+        )
+    )
     run(py("weekly_wiki_health_report.py"))
 
 
 def daily(wiki: Path, request_limit: int) -> None:
     compile_all(wiki)
-    health_check(wiki)
-    run(py("hermes_daily_wiki_self_improvement.py", "--request-limit", str(request_limit)))
+    health_check(wiki, request_limit)
+    run(
+        py(
+            "hermes_daily_wiki_self_improvement.py",
+            "--request-limit",
+            str(request_limit),
+            "--audit-request-limit",
+            str(request_limit),
+        )
+    )
 
 
 def main() -> int:
@@ -60,15 +77,23 @@ def main() -> int:
     parser.add_argument("query", nargs="?", default="")
     parser.add_argument("--wiki", type=Path, default=DEFAULT_WIKI)
     parser.add_argument("--request-limit", type=int, default=2)
+    parser.add_argument(
+        "--audit-request-limit",
+        type=int,
+        default=4,
+        help="Maximum research requests to open during standalone health-check; daily uses --request-limit for both safety caps.",
+    )
     parser.add_argument("--base-url", default="https://linebotqa.zeabur.app")
     parser.add_argument("--include-generated", action="store_true")
     args = parser.parse_args()
+    if args.request_limit < 1 or args.audit_request_limit < 1:
+        parser.error("--request-limit and --audit-request-limit must be >= 1")
 
     wiki = args.wiki.expanduser().resolve()
     if args.command == "compile":
         compile_all(wiki)
     elif args.command == "health-check":
-        health_check(wiki)
+        health_check(wiki, args.audit_request_limit)
     elif args.command == "daily":
         daily(wiki, args.request_limit)
     elif args.command == "generate-qa":
