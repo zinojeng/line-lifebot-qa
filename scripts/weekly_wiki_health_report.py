@@ -47,6 +47,15 @@ def link_exists(root: Path, source: Path, link: str) -> bool:
     return False
 
 
+def frontmatter_value(fm: str, field: str) -> str:
+    match = re.search(rf"^{re.escape(field)}:[ \t]*(.*)$", fm, flags=re.M)
+    return match.group(1).strip() if match else ""
+
+
+def is_resolved_status(fm: str) -> bool:
+    return frontmatter_value(fm, "status").strip("'\"").lower() in {"resolved", "retired", "closed", "done"}
+
+
 def main() -> int:
     root = DEFAULT_WIKI
     report_dir = root / "reports"
@@ -82,6 +91,7 @@ def main() -> int:
         if not fm:
             missing_frontmatter.append(rel)
             continue
+        resolved = is_resolved_status(fm)
         for field in REQUIRED_FIELDS:
             if not re.search(rf"^{re.escape(field)}:", fm, flags=re.M):
                 metadata_gaps.append(f"{rel}: missing {field}")
@@ -96,13 +106,13 @@ def main() -> int:
                 continue
             if not link_exists(root, path, link):
                 broken_links.append(f"{rel} -> {link}")
-        if re.search(r"confidence:\s*(low|uncertain)", fm):
+        if re.search(r"confidence:\s*(low|uncertain)", fm) and not (resolved and rel.startswith("inbox/")):
             low_confidence.append(rel)
-        if rel.startswith("inbox/query-candidates/") and rel != "inbox/query-candidates/README.md":
+        if rel.startswith("inbox/query-candidates/") and rel != "inbox/query-candidates/README.md" and not resolved:
             open_query_candidates.append(rel)
-        if rel.startswith("inbox/retrieval-failures/") and rel != "inbox/retrieval-failures/README.md":
+        if rel.startswith("inbox/retrieval-failures/") and rel != "inbox/retrieval-failures/README.md" and not resolved:
             open_retrieval_failures.append(rel)
-        if rel.startswith("inbox/answer-improvements/") and rel != "inbox/answer-improvements/README.md":
+        if rel.startswith("inbox/answer-improvements/") and rel != "inbox/answer-improvements/README.md" and not resolved:
             open_answer_improvements.append(rel)
         match = re.search(r"last_verified:\s*(\d{4}-\d{2}-\d{2})", fm)
         if match:

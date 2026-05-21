@@ -39,6 +39,24 @@ BUILTIN_CASES = (
         "我54歲使用GLP1減重後，SMI降低、手握力和腿沒力氣，我會不會肌少症？",
         ("sarcopenia", "smi", "handgrip", "chair stand"),
     ),
+    RegressionCase(
+        "gdm-metformin-evidence",
+        "Metformin in GDM evidence",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+        forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "禁用", "完全不能使用", "absolutely forbidden"),
+    ),
+    RegressionCase(
+        "gdm-metformin-zh",
+        "妊娠糖尿病 metformin 證據如何？",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+        forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "禁用", "完全不能使用", "absolutely forbidden"),
+    ),
+    RegressionCase(
+        "gdm-metformin-evidence-grade-zh",
+        "妊娠糖尿病 metformin 的證據等級是什麼？",
+        ("15.17", "15.21", "grade a", "grade b", "metformin"),
+        forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "禁用", "完全不能使用", "absolutely forbidden"),
+    ),
 )
 
 

@@ -1177,6 +1177,7 @@ def retrieval_failure_term_routes(user_text: str) -> list[tuple[str, str]]:
         (r"cgm|連續血糖|糖尿病新科技|血糖機|time in range|tir", "concepts/diabetes-technology-cgm-aid"),
         (r"骨質疏鬆|骨鬆|骨折|骨密度|骨骼|osteoporosis|bone health|fracture|bmd|dxa|frax|t-score", "concepts/diabetes-bone-health-osteoporosis"),
         (r"uacr|albuminuria|白蛋白尿|尿蛋白|dkd|糖尿病腎", "concepts/diabetes-ckd-risk-stratification"),
+        (r"(metformin|glyburide|insulin|胰島素|藥物|用藥|口服藥).{0,120}(gdm|gestational diabetes|diabetes in pregnancy|pregnancy diabetes|妊娠糖尿病|懷孕糖尿病|孕期糖尿病)|(gdm|gestational diabetes|妊娠糖尿病|懷孕糖尿病|孕期糖尿病).{0,120}(metformin|glyburide|insulin|藥物|用藥|口服藥|胰島素)", "claims/ada-2026-gdm-pharmacotherapy-claims"),
         (r"metformin|finerenone|nsmra|a1c.*ckd|洗腎.*a1c|低血糖.*腎", "comparisons/ada-2026-vs-kdigo-2026-diabetes-ckd"),
         (r"older adults|長者|老人|pregnancy|懷孕|妊娠|steroid|glucocorticoid|住院", "guidelines/ada-standards-of-care-2026"),
     ]
@@ -1869,6 +1870,58 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
     context_excerpt = context_search_excerpt(recent_context)
     planning_text = f"{user_text} {context_excerpt}" if contextual_guideline_followup(user_text, recent_context) else user_text
     brain_plan = clinical_search_brain_plan(planning_text)
+    planning_lower = planning_text.lower()
+    gdm_specific = any(term in planning_text for term in ("妊娠糖尿病", "懷孕糖尿病", "孕期糖尿病")) or any(
+        term in planning_lower for term in ("gdm", "gestational diabetes")
+    )
+    diabetes_pregnancy_specific = gdm_specific or "diabetes in pregnancy" in planning_lower or "pregnancy diabetes" in planning_lower
+    pregnancy_drug_specific = any(term in planning_text for term in ("胰島素",)) or any(
+        term in planning_lower for term in ("metformin", "glyburide", "insulin")
+    )
+    generic_gdm_medication = any(term in planning_text for term in ("藥", "用藥", "口服藥")) or any(
+        term in planning_lower for term in ("pharmacotherapy", "medication", "oral agent")
+    )
+    gdm_technology_context = any(term in planning_text for term in ("連續血糖", "幫浦", "自動胰島素")) or any(
+        term in planning_lower for term in ("cgm", "pump", "automated insulin delivery", "aid")
+    )
+    gdm_pharmacotherapy = diabetes_pregnancy_specific and (pregnancy_drug_specific or generic_gdm_medication)
+    if gdm_technology_context and not pregnancy_drug_specific and not generic_gdm_medication:
+        gdm_pharmacotherapy = False
+    if gdm_pharmacotherapy:
+        question_type = (
+            "pregnancy_pharmacotherapy_evidence_grade"
+            if evidence_grade_followup(user_text, recent_context)
+            else "pregnancy_pharmacotherapy_evidence"
+        )
+        intent = {
+            "clinical_intent": "gdm_pharmacotherapy_guideline_question",
+            "question_type": question_type,
+            "patient_context": [user_text, context_excerpt],
+            "must_retrieve": [
+                "ADA 2026 Section 15 Management of Diabetes in Pregnancy",
+                "Recommendation 15.15 lifestyle behavior change and insulin if needed",
+                "Recommendation 15.17 insulin preferred agent for GDM",
+                "Recommendation 15.21 metformin and glyburide not first-line because both cross placenta",
+                "Recommendation 15.21 metformin and glyburide may not be sufficient to achieve glycemic goals",
+                "other oral and noninsulin injectable glucose-lowering medications lack long-term safety data",
+            ],
+            "required_facets": ["pregnancy", "medication", "treatment"],
+            "concepts": ["GDM pharmacotherapy", "metformin in GDM", "insulin preferred agent", "ADA 2026 Section 15"],
+            "target_chapters": ["ADA S15 Management of Diabetes in Pregnancy"],
+            "evidence_targets": ["ADA 15.15", "ADA 15.17", "ADA 15.21", "Grade A", "Grade B", "Grade E"],
+            "avoid_routes": ["CKD metformin-only pages unless the user also asks about kidney disease"],
+            "answer_strategy": (
+                "Answer from ADA 2026 Section 15 pharmacotherapy evidence. State insulin is preferred for GDM; "
+                "metformin/glyburide are not first-line because both cross the placenta and may not meet glycemic goals. "
+                "Do not describe this as an absolute ban."
+            ),
+            "do_not_answer_with": [
+                "no loaded guideline evidence",
+                "CKD metformin renal-dose answer",
+                "absolute prohibition of metformin without individualization",
+            ],
+        }
+        return merge_clinical_brain(intent, brain_plan)
     if evidence_grade_followup(user_text, recent_context):
         intent = {
             "clinical_intent": "guideline_evidence_grade_followup",
@@ -2013,6 +2066,7 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "若使用者用白話描述下肢動脈阻塞、腳血管塞住、跛行、下肢缺血，請理解為 PAD / lower-extremity arterial disease / ASCVD；target_chapters 應包含 ADA S10 與 ADA S12，evidence_targets 應包含 antiplatelet、aspirin/clopidogrel、rivaroxaban plus aspirin、statin/lipid、blood pressure、smoking cessation、vascular assessment/revascularization、GLP-1 RA/semaglutide limb outcome evidence；avoid_routes 要說不要只用一般降血糖藥物表回答。"
         "若使用者提到 HHNK、HHS、高滲透壓、高血糖高滲透壓、酮酸中毒、酮酸、DKA 或高血糖急症，請理解為 hyperglycemic crises；target_chapters 應包含 ADA S16 Diabetes Care in the Hospital 和 ADA S6；evidence_targets 應包含 DKA/HHS diagnostic criteria、Table 16.1、intravenous fluids、insulin、electrolytes、potassium/osmolality/ketones/pH/bicarbonate、transition to subcutaneous insulin、precipitating cause；avoid_routes 要說不要從 GDM 或一般 outpatient diagnosis criteria 回答。"
         "若使用者提到住院/病房/inpatient/hospitalized 加上類固醇/glucocorticoid/steroid/corticosteroid/prednisone/prednisolone/dexamethasone 與高血糖，請理解為 glucocorticoid-associated inpatient hyperglycemia；target_chapters 應包含 ADA S16 和 ADA S9；evidence_targets 應包含 NPH insulin with prednisone/prednisolone、basal insulin for dexamethasone or continuous glucocorticoids、prandial/correction insulin increases、daily adjustment、POC blood glucose monitoring；required_facets 應包含 hospital_context, steroid_context, treatment。"
+        "若使用者提到 GDM、gestational diabetes、妊娠糖尿病、懷孕糖尿病，加上 metformin、glyburide、insulin、藥物、口服藥或 pharmacotherapy，請理解為 ADA S15 pregnancy pharmacotherapy；target_chapters 應包含 ADA S15；evidence_targets 應包含 Recommendation 15.15、15.17、15.21、insulin preferred agent for GDM、metformin/glyburide not first-line、cross placenta、may not be sufficient for glycemic goals、other oral/noninsulin agents lack long-term safety data；required_facets 應包含 pregnancy, medication, treatment；avoid_routes 要說不要只走 CKD metformin。"
         "若使用者提到骨質疏鬆、骨鬆、骨折、骨密度、骨骼健康、osteoporosis、bone health、fracture、BMD、DXA、T-score 或 FRAX，請理解為 diabetes bone health / osteoporosis；target_chapters 應包含 ADA S4 Comprehensive Medical Evaluation；evidence_targets 應包含 recommendations 4.8-4.13b、fracture risk assessment、DXA/BMD monitoring、T-score <= -2.5、T-score -2.0 to -2.5 with additional risk factors、fragility fracture、FRAX、TZD/sulfonylurea fracture risk、hypoglycemia/falls、calcium/vitamin D；required_facets 應包含 bone_health, fracture_risk, treatment；avoid_routes 要說不要只用視網膜、足部、PAD 或 CKD 內容回答，也不要在已檢索到 FRAX/T-score/DXA 時說缺乏這些資訊。"
         "若本次問題很短，像「哪些證據等級較低」、「哪些是 strong recommendation」、「那證據等級呢」，請使用最近對話脈絡還原上一題的疾病、藥物與指南範圍；question_type 應是 evidence_grade_comparison，required_facets 至少包含 medication, treatment，evidence_targets 應包含 recommendation strength、evidence grade、strong/conditional、grade 1/2、A/B/C/D、expert consensus。不要把這種短 follow-up 判成 out-of-scope。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
@@ -2051,7 +2105,7 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "avoid_routes",
         "do_not_answer_with",
     ):
-        merged[key] = json_list(merged.get(key))
+        merged[key] = dedupe_preserve([*json_list(fallback.get(key)), *json_list(data.get(key))])
     planning_text = (
         f"{user_text} {context_search_excerpt(recent_context)}"
         if contextual_guideline_followup(user_text, recent_context)
@@ -2083,6 +2137,7 @@ def build_retrieval_query(
         "若 concepts 或問題指向 PAD、peripheral artery disease、下肢動脈阻塞、下肢缺血或跛行，請加入 ADA section 10、ADA section 12、PAD、lower-extremity arterial disease、ASCVD、antiplatelet、aspirin、clopidogrel、rivaroxaban、statin、lipid-lowering、blood pressure、smoking cessation、ABI、toe pressure、revascularization、semaglutide、STRIDE、limb outcomes；並避免只搜尋 glucose-lowering medication table。"
         "若問題提到 HHNK、HHS、高滲透壓、高血糖高滲透壓、酮酸中毒、酮酸、DKA 或高血糖急症，請加入 ADA section 16、dc26s016、hyperglycemic crises、DKA、diabetic ketoacidosis、HHS、hyperosmolar hyperglycemic state、diagnostic criteria、Table 16.1、intravenous fluids、insulin、electrolytes、potassium、osmolality、ketones、pH、bicarbonate、transition to subcutaneous insulin、precipitating cause；並避免搜尋 GDM/outpatient diagnosis criteria。"
         "若問題提到住院/病房/inpatient/hospitalized 加上類固醇/glucocorticoid/steroid/corticosteroid/prednisone/prednisolone/dexamethasone 與高血糖，請加入 ADA section 16、dc26s016、glucocorticoid therapy、steroid-induced hyperglycemia、NPH insulin、prednisone、prednisolone、dexamethasone、basal insulin、prandial insulin、correction insulin、point-of-care blood glucose monitoring、ADA section 9、recommendation 9.36、frequent reassessment。"
+        "若問題提到 GDM、gestational diabetes、妊娠糖尿病、懷孕糖尿病，加上 metformin、glyburide、insulin、藥物、口服藥或 pharmacotherapy，請加入 ADA section 15、dc26s015、Recommendation 15.15、15.17、15.21、insulin preferred agent、metformin glyburide not first-line、cross placenta、may not be sufficient to achieve glycemic goals、long-term safety data。"
         "若本次問題是短 follow-up，詢問證據等級、strong recommendation、conditional recommendation、grade 1/2、A/B/C/D 或哪些證據較低，請從最近對話脈絡帶入上一題的疾病、用藥與指南範圍，並加入 ADA 2026、KDIGO 2026、recommendation strength、evidence grade、strong recommendation、conditional recommendation、expert consensus、SGLT2 inhibitor、GLP-1 RA、metformin、insulin、finerenone、CKD、ASCVD、albuminuria。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"
@@ -2362,7 +2417,7 @@ def guideline_scope_question(user_text: str, clinical_intent: dict[str, Any] | N
             intent_terms.extend(json_list(clinical_intent.get(key)))
     lower = f"{user_text} {' '.join(intent_terms)}".lower()
     if re.search(
-        r"\b(diabetes|diabetic|t1d|t2d|ckd|kidney|renal|egfr|uacr|albuminuria|hypertension|blood pressure|bp|lipid|ldl|statin|ascvd|cardiovascular|heart failure|hfpef|hfref|cgm|tir|a1c|hba1c|insulin|metformin|sglt|glp|finerenone|obesity|masld|mash|nafld|nash|retinopathy|neuropathy|pad|foot|hospital|inpatient|pregnancy)\b",
+        r"\b(diabetes|diabetic|t1d|t2d|ckd|kidney|renal|egfr|uacr|albuminuria|hypertension|blood pressure|bp|lipid|ldl|statin|ascvd|cardiovascular|heart failure|hfpef|hfref|cgm|tir|a1c|hba1c|insulin|metformin|glyburide|sglt|glp|finerenone|obesity|masld|mash|nafld|nash|retinopathy|neuropathy|pad|foot|hospital|inpatient|pregnancy|gestational|gdm)\b",
         lower,
     ):
         return True

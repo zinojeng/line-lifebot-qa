@@ -75,6 +75,36 @@ CASES = (
         ("pregnancy", "gestational", "cgm", "ada"),
     ),
     SmokeCase(
+        "gdm-metformin-evidence",
+        "Metformin in GDM evidence",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+    ),
+    SmokeCase(
+        "gdm-metformin-zh",
+        "妊娠糖尿病 metformin 證據如何？",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+    ),
+    SmokeCase(
+        "gdm-oral-agent-zh",
+        "妊娠糖尿病可以用口服藥嗎？",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+    ),
+    SmokeCase(
+        "gdm-oral-agent-reversed-zh",
+        "用藥 妊娠糖尿病 metformin 證據等級",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+    ),
+    SmokeCase(
+        "gdm-medication-reversed-zh",
+        "藥物 妊娠糖尿病",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+    ),
+    SmokeCase(
+        "gdm-medication-no-space-zh",
+        "懷孕糖尿病用藥",
+        ("15.17", "15.21", "metformin", "glyburide", "insulin"),
+    ),
+    SmokeCase(
         "hospital-steroid",
         "住院使用 steroid 造成高血糖 ADA 2026 要怎麼找章節？",
         ("hospital", "steroid", "glucocorticoid", "hyperglycemia"),

@@ -33,6 +33,23 @@ def review_json(text: str) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def frontmatter(text: str) -> str:
+    if not text.startswith("---"):
+        return ""
+    match = re.match(r"^---\s*\n(.*?)\n---", text, flags=re.S)
+    return match.group(1) if match else ""
+
+
+def frontmatter_value(text: str, field: str) -> str:
+    fm = frontmatter(text)
+    match = re.search(rf"^{re.escape(field)}:[ \t]*(.*)$", fm, flags=re.M)
+    return match.group(1).strip() if match else ""
+
+
+def is_resolved_record(text: str) -> bool:
+    return frontmatter_value(text, "status").strip("'\"").lower() in {"resolved", "retired", "closed", "done"}
+
+
 def list_values(value: object) -> list[str]:
     if isinstance(value, list):
         return [str(item).strip() for item in value if str(item).strip()]
@@ -47,6 +64,17 @@ def in_scope_value(value: str) -> bool:
 
 def classify_topic(text: str) -> str:
     question = section(text, "Question").lower()
+    if re.search(r"gdm|gestational|pregnancy|妊娠|懷孕", question) and re.search(
+        r"metformin|glyburide|insulin|pharmacotherapy|medication|oral|evidence|藥|用藥|口服藥|胰島素",
+        question,
+    ):
+        return "gdm-pharmacotherapy"
+    if re.search(r"sarcopenia|smi|muscle|lean mass|handgrip|肌少症|肌肉|握力|腿沒力", question):
+        return "glp1-muscle-sarcopenia"
+    if re.search(r"finerenone|nsmra|非類固醇", question):
+        return "diabetes-ckd"
+    if re.search(r"tzd|pioglitazone|thiazolidinedione|噻唑烷二酮|胰島素增敏", question):
+        return "tzd-pioglitazone"
     if re.search(r"骨|骨鬆|骨質疏鬆|osteoporosis|fracture|bone", question):
         return "bone-health"
     if re.search(r"sglt|排糖藥|egfr.*20|腎功能.*20", question):
@@ -65,27 +93,46 @@ def main() -> int:
     improvement_dir = root / "inbox" / "answer-improvements"
     report_dir = root / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
-    files = sorted(path for path in improvement_dir.glob("*.md") if path.name != "README.md") if improvement_dir.exists() else []
+    all_files = (
+        sorted(path for path in improvement_dir.glob("*.md") if path.name != "README.md")
+        if improvement_dir.exists()
+        else []
+    )
+    files = [path for path in all_files if not is_resolved_record(path.read_text(encoding="utf-8", errors="ignore"))]
 
     topics: dict[str, list[Path]] = defaultdict(list)
     public_wording = Counter()
     missing_facets = Counter()
     retrieval_issues = Counter()
+    reviewer_diagnostics = Counter()
     safe_actions = Counter()
     human_review = []
     quality_scores = []
+    rescaled_quality_paths = []
 
     for path in files:
         text = path.read_text(encoding="utf-8", errors="ignore")
         topics[classify_topic(text)].append(path)
         review = review_json(text)
         if not review:
-            retrieval_issues["review_json_missing_or_invalid"] += 1
+            reviewer_diagnostics["review_json_missing_or_invalid"] += 1
             continue
         if review.get("requires_human_or_clinical_review"):
             human_review.append(path)
         try:
-            quality_scores.append(float(review.get("quality_score", 0)))
+            raw_score = review.get("quality_score")
+            if raw_score is None:
+                reviewer_diagnostics["quality_score_missing"] += 1
+                score = None
+            else:
+                score = float(raw_score)
+            if score is not None and 0 < score < 1:
+                rescaled_quality_paths.append(path)
+                score *= 5
+            if score is not None and 0 <= score <= 5:
+                quality_scores.append(score)
+            elif score is not None:
+                reviewer_diagnostics[f"quality_score_out_of_range:{score:g}"] += 1
         except (TypeError, ValueError):
             pass
         for value in list_values(review.get("public_wording_issues")):
@@ -115,7 +162,10 @@ def main() -> int:
         "## Summary",
         "",
         f"- Open answer improvement records: {len(files)}",
+        f"- Resolved answer improvement records excluded: {len(all_files) - len(files)}",
         f"- Average quality score: {avg_quality:.2f}",
+        f"- Quality scores normalized from 0-1 reviewer scale to 0-5: {len(rescaled_quality_paths)}",
+        "- Quality score policy: values in (0, 1) are treated as normalized reviewer scores; missing, exactly 1.0, or out-of-range scores are not auto-rescaled.",
         f"- Records requiring human/source review: {len(human_review)}",
         f"- Routed topics: {len(topics)}",
         "",
@@ -139,6 +189,7 @@ def main() -> int:
         ("Repeated Public Wording Issues", public_wording),
         ("Repeated Missing Evidence Facets", missing_facets),
         ("Repeated Retrieval Route Issues", retrieval_issues),
+        ("Reviewer Diagnostics", reviewer_diagnostics),
         ("Repeated Safe Auto Actions", safe_actions),
     ]
     for title, counter in buckets:

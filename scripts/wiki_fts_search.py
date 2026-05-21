@@ -180,6 +180,26 @@ def evidence_grade_query(query: str) -> bool:
     )
 
 
+def pregnancy_pharmacotherapy_query(query: str) -> bool:
+    lower = query.lower()
+    gdm_specific = any(term in query for term in ("妊娠糖尿病", "懷孕糖尿病", "孕期糖尿病")) or any(
+        term in lower for term in ("gdm", "gestational diabetes")
+    )
+    diabetes_pregnancy = gdm_specific or any(term in lower for term in ("diabetes in pregnancy", "pregnancy diabetes"))
+    drug_specific = any(term in query for term in ("胰島素",)) or any(
+        term in lower for term in ("metformin", "glyburide", "insulin")
+    )
+    generic_gdm_medication = any(term in query for term in ("藥", "用藥", "口服藥")) or any(
+        term in lower for term in ("pharmacotherapy", "medication", "oral agent")
+    )
+    return diabetes_pregnancy and (drug_specific or generic_gdm_medication)
+
+
+def kidney_context_query(query: str) -> bool:
+    lower = query.lower()
+    return "腎" in query or any(term in lower for term in ("ckd", "egfr", "kidney", "renal", "uacr", "albuminuria"))
+
+
 def rerank_rows(rows: list[sqlite3.Row | dict], query: str, limit: int) -> list[sqlite3.Row | dict]:
     best: dict[tuple[str, str], tuple[float, sqlite3.Row | dict]] = {}
     for row in rows:
@@ -199,6 +219,17 @@ def rerank_rows(rows: list[sqlite3.Row | dict], query: str, limit: int) -> list[
                 score *= 20.0
             if any(term in haystack for term in ("claim_id", "lower-certainty", "grade c", "practice point", "1c")):
                 score *= 3.0
+        if pregnancy_pharmacotherapy_query(query):
+            if "ada-2026-gdm-pharmacotherapy" in path:
+                score *= 40.0
+            if "diabetes-pregnancy-gdm-cgm" in path:
+                score *= 15.0
+            if any(term in haystack for term in ("15.17", "15.21", "not first-line", "cross placenta", "glyburide", "insulin preferred")):
+                score *= 5.0
+            if page_type == "claim" or path.startswith("claims/"):
+                score *= 3.0
+            if not kidney_context_query(query) and any(term in haystack for term in ("ckd", "egfr", "albuminuria", "kidney")):
+                score *= 0.2
         key = (path, section)
         existing = best.get(key)
         if not existing or score > existing[0]:
@@ -248,6 +279,17 @@ def fallback_like_search(conn: sqlite3.Connection, query: str, limit: int) -> li
             score *= 6.0
         if evidence_grade_query(query) and "ada-kdigo-2026-ckd-cardiorenal-claims" in str(row["path"]):
             score *= 20.0
+        if pregnancy_pharmacotherapy_query(query):
+            path = str(row["path"])
+            row_text = " ".join(str(row[key]).lower() for key in ("title", "section", "frontmatter", "excerpt"))
+            if "ada-2026-gdm-pharmacotherapy" in path:
+                score *= 40.0
+            if "diabetes-pregnancy-gdm-cgm" in path:
+                score *= 15.0
+            if any(term in row_text for term in ("15.17", "15.21", "not first-line", "cross placenta", "glyburide", "insulin preferred")):
+                score *= 5.0
+            if not kidney_context_query(query) and any(term in row_text for term in ("ckd", "egfr", "albuminuria", "kidney")):
+                score *= 0.2
         if score > 0:
             scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)

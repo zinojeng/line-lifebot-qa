@@ -36,7 +36,7 @@ def split_frontmatter(text: str) -> tuple[str, str]:
 
 
 def field(frontmatter: str, key: str) -> str:
-    match = re.search(rf"^{re.escape(key)}:\s*(.*)$", frontmatter, flags=re.M)
+    match = re.search(rf"^{re.escape(key)}:[ \t]*(.*)$", frontmatter, flags=re.M)
     return match.group(1).strip().strip("'\"") if match else ""
 
 

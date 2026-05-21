@@ -147,6 +147,10 @@ QUERY_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "懷孕": ("pregnancy", "gestational", "preconception"),
     "懷孕糖尿病": ("gestational diabetes mellitus", "GDM", "screening", "diagnosis", "OGTT", "24-28 weeks"),
     "妊娠糖尿病": ("gestational diabetes mellitus", "GDM", "screening", "diagnosis", "OGTT", "24-28 weeks"),
+    "孕期糖尿病": ("gestational diabetes mellitus", "GDM", "pregnancy diabetes", "ADA Section 15"),
+    "妊娠糖尿病 metformin": ("GDM pharmacotherapy", "ADA Section 15", "Recommendation 15.17", "Recommendation 15.21", "insulin preferred", "metformin glyburide not first-line", "cross placenta"),
+    "妊娠糖尿病 口服藥": ("GDM pharmacotherapy", "oral agents", "metformin", "glyburide", "not first-line", "cross placenta", "long-term safety data"),
+    "懷孕糖尿病 用藥": ("GDM pharmacotherapy", "insulin preferred", "metformin", "glyburide", "ADA Section 15"),
     "兒童": ("children", "adolescents", "pediatric", "youth"),
     "老人": ("older adults", "geriatric", "frailty"),
     "住院": ("hospital", "inpatient", "admission", "glucocorticoid therapy", "inpatient hyperglycemia"),
@@ -2602,7 +2606,7 @@ ONTOLOGY_PATTERNS: dict[str, tuple[tuple[str, str], ...]] = {
     "population": (
         ("older_adults", r"\b(older adults|geriatric|frailty)\b|老人|長者|高齡"),
         ("children_adolescents", r"\b(children|adolescents|youth|pediatric)\b|兒童|青少年"),
-        ("pregnancy", r"\b(pregnancy|gestational|preconception|postpartum)\b|懷孕|妊娠|產後"),
+        ("pregnancy", r"\b(pregnancy|gestational|gdm|preconception|postpartum)\b|懷孕|妊娠|產後"),
         ("hospitalized", r"\b(hospital|inpatient|critical illness)\b|住院"),
         ("perioperative", r"\b(perioperative|surgery|procedure)\b|手術"),
         ("dialysis", r"\b(dialysis|eskd|esrd|kidney failure)\b|洗腎|透析"),
@@ -2804,7 +2808,7 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
             for variant_query in entry.variant_queries[:2]
         )
 
-    pregnancy_query = any(term in query for term in ("懷孕", "妊娠", "孕")) or any(
+    pregnancy_query = any(term in query for term in ("懷孕", "妊娠", "孕", "孕婦", "孕期", "孕媽")) or any(
         term in query_lower for term in ("pregnancy", "gestational", "gdm")
     )
     diagnosis_query = any(term in query for term in ("診斷", "篩檢", "標準")) or any(
@@ -2816,6 +2820,27 @@ def query_variant_specs(query: str) -> list[QueryVariant]:
                 "clinical_context",
                 f"{query} gestational diabetes mellitus GDM screening diagnosis Table 2.8 one-step two-step OGTT 24-28 weeks fasting 1 h 2 h Carpenter-Coustan IADPSG",
                 0.88,
+            )
+        )
+    gdm_specific_query = any(term in query for term in ("妊娠糖尿病", "懷孕糖尿病", "孕期糖尿病")) or any(
+        term in query_lower for term in ("gdm", "gestational diabetes")
+    )
+    diabetes_pregnancy_query = gdm_specific_query or any(
+        term in query_lower for term in ("diabetes in pregnancy", "pregnancy diabetes")
+    )
+    pregnancy_drug_query = any(term in query for term in ("胰島素",)) or any(
+        term in query_lower for term in ("metformin", "glyburide", "insulin")
+    )
+    generic_gdm_medication_query = any(term in query for term in ("藥", "用藥", "口服藥")) or any(
+        term in query_lower for term in ("pharmacotherapy", "medication", "oral agent")
+    )
+    pregnancy_medication_query = diabetes_pregnancy_query and (pregnancy_drug_query or generic_gdm_medication_query)
+    if pregnancy_medication_query:
+        variants.append(
+            QueryVariant(
+                "gdm_pharmacotherapy",
+                f"{query} ADA Section 15 GDM pharmacotherapy Recommendation 15.15 15.17 15.21 insulin preferred agent metformin glyburide not first-line cross placenta glycemic goals long-term safety data",
+                1.04,
             )
         )
 
@@ -3072,6 +3097,26 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
             "ADA section 7 continuous glucose monitoring CGM recommended diabetes onset insulin therapy noninsulin therapies hypoglycemia time in range"
         ],
     },
+    "gdm_pharmacotherapy": {
+        "concepts": ["GDM pharmacotherapy", "diabetes in pregnancy medication", "insulin", "metformin", "glyburide"],
+        "target_chapters": ["ADA S15 Management of Diabetes in Pregnancy"],
+        "evidence_targets": [
+            "ADA 2026 Recommendation 15.15 lifestyle behavior change and add insulin if needed",
+            "ADA 2026 Recommendation 15.17 insulin preferred agent for GDM",
+            "ADA 2026 Recommendation 15.21 metformin and glyburide not first-line because both cross placenta",
+            "ADA 2026 Recommendation 15.21 metformin and glyburide may not be sufficient to achieve glycemic goals",
+            "other oral and noninsulin injectable medications lack long-term safety data",
+        ],
+        "avoid_routes": [
+            "do not route metformin in GDM to CKD metformin pages unless kidney disease is also asked",
+            "do not answer that no guideline evidence is loaded when ADA Section 15 pregnancy pharmacotherapy is retrieved",
+        ],
+        "required_facets": ["pregnancy", "medication", "treatment"],
+        "search_queries": [
+            "ADA section 15 dc26s015 GDM pharmacotherapy insulin preferred agent Recommendation 15.17 metformin glyburide not first-line Recommendation 15.21 cross placenta glycemic goals long-term safety data",
+            "Metformin in GDM evidence gestational diabetes medication ADA 2026 pregnancy pharmacotherapy insulin metformin glyburide",
+        ],
+    },
     "ckd": {
         "concepts": ["CKD", "diabetic kidney disease", "eGFR", "albuminuria"],
         "target_chapters": ["ADA S11 CKD", "ADA S9 Pharmacologic Approaches", "KDIGO Diabetes and CKD"],
@@ -3173,6 +3218,16 @@ def clinical_search_brain_plan(query: str) -> dict[str, list[str]]:
         term in lower for term in ("ckd", "kidney", "renal", "egfr", "uacr", "albuminuria")
     ):
         concepts.add("ckd")
+    gdm_specific = any(term in query for term in ("妊娠糖尿病", "懷孕糖尿病", "孕期糖尿病")) or any(
+        term in lower for term in ("gdm", "gestational diabetes")
+    )
+    diabetes_pregnancy_specific = gdm_specific or any(term in lower for term in ("diabetes in pregnancy", "pregnancy diabetes"))
+    pregnancy_drug_specific = any(term in query for term in ("胰島素",)) or any(term in lower for term in ("metformin", "glyburide", "insulin"))
+    generic_gdm_medication = any(term in query for term in ("藥", "用藥", "口服藥")) or any(
+        term in lower for term in ("pharmacotherapy", "medication", "oral agent")
+    )
+    if diabetes_pregnancy_specific and (pregnancy_drug_specific or generic_gdm_medication):
+        concepts.add("gdm_pharmacotherapy")
     if any(term in query for term in ("脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
         term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
     ):
@@ -3266,9 +3321,19 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
     ):
         concepts.add("evidence_grade")
     if any(term in query for term in ("治療", "處理", "怎麼辦", "用藥", "手術", "雷射", "注射")) or any(
-        term in lower for term in ("treatment", "therapy", "intervention", "anti-vegf", "photocoagulation", "vitrectomy")
+        term in lower for term in ("treatment", "therapy", "intervention", "pharmacotherapy", "anti-vegf", "photocoagulation", "vitrectomy")
     ):
         concepts.add("treatment")
+    gdm_specific = any(term in query for term in ("妊娠糖尿病", "懷孕糖尿病", "孕期糖尿病")) or any(
+        term in lower for term in ("gdm", "gestational diabetes")
+    )
+    diabetes_pregnancy_specific = gdm_specific or any(term in lower for term in ("diabetes in pregnancy", "pregnancy diabetes"))
+    pregnancy_drug_specific = any(term in query for term in ("胰島素",)) or any(term in lower for term in ("metformin", "glyburide", "insulin"))
+    generic_gdm_medication = any(term in query for term in ("藥", "用藥", "口服藥")) or any(
+        term in lower for term in ("pharmacotherapy", "medication", "oral agent")
+    )
+    if diabetes_pregnancy_specific and (pregnancy_drug_specific or generic_gdm_medication):
+        concepts.add("gdm_pharmacotherapy")
     if (
         any(term in query for term in ("血壓", "高血壓"))
         or any(term in lower for term in ("blood pressure", "hypertension", "bp target", "bp goal"))
@@ -3842,12 +3907,25 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         term in query_lower for term in ("dialysis", "kidney failure", "stage g5", "eskd", "esrd")
     )
     pregnancy_diagnosis_query = (
-        any(term in query for term in ("懷孕", "妊娠", "孕"))
+        any(term in query for term in ("懷孕", "妊娠", "孕", "孕婦"))
         or any(term in query_lower for term in ("pregnancy", "gestational", "gdm"))
     ) and (
         any(term in query for term in ("診斷", "篩檢", "標準"))
         or any(term in query_lower for term in ("diagnosis", "screening", "criteria", "ogtt"))
     )
+    gdm_specific_query = any(term in query for term in ("妊娠糖尿病", "懷孕糖尿病", "孕期糖尿病")) or any(
+        term in query_lower for term in ("gdm", "gestational diabetes")
+    )
+    diabetes_pregnancy_query = gdm_specific_query or any(
+        term in query_lower for term in ("diabetes in pregnancy", "pregnancy diabetes")
+    )
+    pregnancy_drug_query = any(term in query for term in ("胰島素",)) or any(
+        term in query_lower for term in ("metformin", "glyburide", "insulin")
+    )
+    generic_gdm_medication_query = any(term in query for term in ("藥", "用藥", "口服藥")) or any(
+        term in query_lower for term in ("pharmacotherapy", "medication", "oral agent")
+    )
+    pregnancy_medication_query = diabetes_pregnancy_query and (pregnancy_drug_query or generic_gdm_medication_query)
     hyperglycemic_crisis_query = any(term in query for term in ("HHNK", "高滲透壓", "高血糖高滲透壓", "高血糖急症", "酮酸", "酮酸中毒")) or any(
         term in query_lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
     )
@@ -3911,6 +3989,27 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 150.0
     if evidence_grade_query and re.search(r"\b(claim_id|lower-certainty|lower certainty|practice point|grade c|1c|strong recommendation|recommendation grade)\b|哪些證據等級較低|哪些是 strong recommendation", haystack):
         adjustment *= 12.0
+    if pregnancy_medication_query and re.search(
+        r"\b(gdm|gestational diabetes|diabetes in pregnancy|pregnancy|metformin|glyburide|insulin|pharmacotherapy|oral agents?|15\.15|15\.17|15\.21|cross the placenta|not first-line|long-term safety)\b",
+        haystack,
+    ):
+        adjustment *= 8.0
+    if pregnancy_medication_query and (
+        "ada-2026-gdm-pharmacotherapy" in haystack
+        or "diabetes-pregnancy-gdm-cgm" in haystack
+        or "dc26s015" in haystack
+        or "management of diabetes in pregnancy" in haystack
+    ):
+        adjustment *= 12.0
+    if pregnancy_medication_query and "claims/ada-2026-gdm-pharmacotherapy-claims" in haystack:
+        adjustment *= 900.0
+    if pregnancy_medication_query and "evidence-cards/ada-2026-gdm-pharmacotherapy-recommendation-grades" in haystack:
+        adjustment *= 350.0
+    if pregnancy_medication_query and not kidney_query and re.search(
+        r"\b(ckd|chronic kidney disease|egfr|uacr|albuminuria|kidney)\b|腎",
+        haystack,
+    ):
+        adjustment *= 0.12
     if bone_health_query and re.search(
         r"\b(osteoporosis|bone health|fracture risk|fragility fracture|bone mineral density|bmd|dxa|t-score|frax|calcium|vitamin d|bisphosphonate|denosumab|romosozumab|thiazolidinedione|sulfonylurea)\b|骨質疏鬆|骨鬆|骨折|骨密度|骨骼",
         haystack,
