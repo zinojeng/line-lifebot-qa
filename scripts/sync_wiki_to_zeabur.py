@@ -11,6 +11,7 @@ import tarfile
 import tempfile
 import urllib.error
 import urllib.request
+import uuid
 from pathlib import Path
 
 
@@ -112,15 +113,20 @@ def sync_wiki(
     archive = make_archive(local_wiki)
     encoded = base64.b64encode(archive).decode("ascii")
     remote_parent = str(Path(remote_wiki).parent)
-    remote_tmp_b64 = f"/tmp/{local_wiki.name}.tar.gz.b64"
-    remote_tmp_tgz = f"/tmp/{local_wiki.name}.tar.gz"
+    remote_sync_dir = f"{remote_parent}/.wiki-sync-{uuid.uuid4().hex[:12]}"
+    remote_tmp_b64 = f"{remote_sync_dir}/{local_wiki.name}.tar.gz.b64"
+    remote_tmp_tgz = f"{remote_sync_dir}/{local_wiki.name}.tar.gz"
 
     local_md_count = sum(1 for path in local_wiki.rglob("*.md") if path.is_file())
     print(f"local_wiki={local_wiki}")
     print(f"local_markdown_files={local_md_count}")
     print(f"archive_bytes={len(archive)} base64_chars={len(encoded)} chunks={(len(encoded) + chunk_chars - 1) // chunk_chars}")
 
-    zeabur_exec(service_id, env_id, f"rm -f {shlex.quote(remote_tmp_b64)} {shlex.quote(remote_tmp_tgz)}")
+    zeabur_exec(
+        service_id,
+        env_id,
+        f"mkdir -p {shlex.quote(remote_sync_dir)} && rm -f {shlex.quote(remote_tmp_b64)} {shlex.quote(remote_tmp_tgz)}",
+    )
     for index in range(0, len(encoded), chunk_chars):
         chunk = encoded[index : index + chunk_chars]
         zeabur_exec(service_id, env_id, f"printf %s {shlex.quote(chunk)} >> {shlex.quote(remote_tmp_b64)}")
@@ -138,7 +144,7 @@ def sync_wiki(
                 f"cp -a {shlex.quote(remote_wiki)}/$d \"$PRESERVE_DIR/$d\"; "
                 "fi; done"
             ),
-            f"mkdir -p {shlex.quote(remote_parent)}",
+            f"mkdir -p {shlex.quote(remote_parent)} {shlex.quote(remote_sync_dir)}",
             f"base64 -d {shlex.quote(remote_tmp_b64)} > {shlex.quote(remote_tmp_tgz)}",
             f"rm -rf {shlex.quote(remote_wiki)}",
             f"tar -xzf {shlex.quote(remote_tmp_tgz)} -C {shlex.quote(remote_parent)}",
@@ -151,7 +157,7 @@ def sync_wiki(
             ),
             f"find {shlex.quote(remote_wiki)} \\( -name '._*' -o -name '.DS_Store' \\) -delete",
             "rm -rf \"$PRESERVE_DIR\"",
-            f"rm -f {shlex.quote(remote_tmp_b64)} {shlex.quote(remote_tmp_tgz)}",
+            f"rm -rf {shlex.quote(remote_sync_dir)}",
             f"printf 'remote_markdown_files=' && find {shlex.quote(remote_wiki)} -name '*.md' | wc -l",
         ]
     )
