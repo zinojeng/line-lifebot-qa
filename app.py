@@ -1819,14 +1819,12 @@ def clinical_intent_text(clinical_intent: dict[str, Any] | None) -> str:
     parts = [
         str(clinical_intent.get("clinical_intent") or "").strip(),
         str(clinical_intent.get("question_type") or "").strip(),
-        str(clinical_intent.get("answer_strategy") or "").strip(),
         *json_list(clinical_intent.get("patient_context")),
         *json_list(clinical_intent.get("must_retrieve")),
         *json_list(clinical_intent.get("required_facets")),
         *json_list(clinical_intent.get("concepts")),
         *json_list(clinical_intent.get("target_chapters")),
         *json_list(clinical_intent.get("evidence_targets")),
-        *json_list(clinical_intent.get("avoid_routes")),
     ]
     return " ".join(part for part in parts if part).strip()
 
@@ -1839,6 +1837,27 @@ def clinical_intent_prompt(clinical_intent: dict[str, Any] | None) -> str:
         "以下 JSON 是本輪回答前對使用者問題的臨床意圖拆解，用來定義要檢索與整理哪些證據；"
         "它不是醫療知識來源，最終回答仍只能根據已載入指南與知識庫內容。\n"
         f"{json.dumps(clinical_intent, ensure_ascii=False)}"
+    )
+
+
+def clinical_retrieval_intent_prompt(clinical_intent: dict[str, Any] | None) -> str:
+    if not clinical_intent:
+        return ""
+    allowed_keys = (
+        "clinical_intent",
+        "question_type",
+        "patient_context",
+        "must_retrieve",
+        "required_facets",
+        "concepts",
+        "target_chapters",
+        "evidence_targets",
+    )
+    retrieval_intent = {key: clinical_intent.get(key) for key in allowed_keys if clinical_intent.get(key)}
+    return (
+        "\n\n臨床檢索目標：\n"
+        "以下 JSON 只保留正向檢索欄位；負面路由與回答策略欄位不應進入 search_query。\n"
+        f"{json.dumps(retrieval_intent, ensure_ascii=False)}"
     )
 
 
@@ -2352,7 +2371,8 @@ def build_retrieval_query(
         "你不是回答者，也不要提供醫療建議。"
         "你的唯一任務是把 LINE 病友問題轉成已載入臨床指南文件檢索查詢。"
         "請根據本次問題與最近對話脈絡，補上可能出現在這些指南文件中的英文術語、縮寫、同義詞與章節詞。"
-        "你會收到 clinical intent JSON；請優先根據 concepts、target_chapters、evidence_targets、must_retrieve、required_facets、avoid_routes、answer_strategy 產生多面向檢索詞。"
+        "你會收到 clinical intent JSON；請優先根據 concepts、target_chapters、evidence_targets、must_retrieve、required_facets 產生多面向檢索詞。"
+        "avoid_routes 與 do_not_answer_with 是負面路由規則，只能用來排除方向，不可把其中的否定詞、禁搜詞或不該走的章節詞加入 search_query。"
         "若問題是血糖控制目標、A1C 目標、CGM/TIR 目標，請加入 ADA section 6、glycemic goals、A1C goal、individualized targets、CGM metrics、time in range。"
         "若問題是血壓控制目標、高血壓目標、BP target，請加入 ADA section 10、dc26s010、Treatment Goals、blood pressure goals、hypertension、Recommendation 10.3、Recommendation 10.4、on-treatment blood pressure goal、<130/80 mmHg、systolic blood pressure goal <120 mmHg、high cardiovascular or kidney risk、individualized/shared decision-making；不要加入 glycemic goals 或 A1C target，除非使用者同時問血糖。"
         "若問題是血脂、膽固醇、LDL 或三酸甘油脂治療目標，請加入 ADA section 10、dc26s010、lipid management、LDL cholesterol、statin therapy、primary prevention、secondary prevention、ASCVD、triglyceride；不要加入 glycemic goals 或 A1C target，除非使用者同時問血糖。"
@@ -2373,7 +2393,7 @@ def build_retrieval_query(
     prompt = (
         f"本次問題：{user_text}\n\n"
         f"{recent_context or '最近對話脈絡：無'}\n\n"
-        f"{clinical_intent_prompt(clinical_intent) or '臨床問題理解：無'}\n\n"
+        f"{clinical_retrieval_intent_prompt(clinical_intent) or '臨床問題理解：無'}\n\n"
         "請產生適合全文檢索糖尿病指南 Markdown 的查詢。"
     )
     try:
