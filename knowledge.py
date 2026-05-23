@@ -86,6 +86,18 @@ except ModuleNotFoundError:
         )
 
 
+CKD_COMPARISON_PATH = "comparisons/ada-2026-vs-kdigo-2026-diabetes-ckd"
+CKD_EVIDENCE_STRENGTH_MAP_PATH = "comparisons/ada-kdigo-2026-evidence-strength-map"
+MASLD_CROSS_GUIDELINE_AGGREGATE_SOURCE = "compiled-cross-guideline-masld_mash"
+CKD_EVIDENCE_GRADE_EXCLUSION_MARKERS = (
+    CKD_CARDIORENAL_CLAIMS_PATH,
+    CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE,
+    CKD_CARDIORENAL_EVIDENCE_CARD_PATH,
+    CKD_COMPARISON_PATH,
+    CKD_EVIDENCE_STRENGTH_MAP_PATH,
+)
+
+
 DEFAULT_KNOWLEDGE_DIR = os.getenv("LINE_KNOWLEDGE_DIR", "/app/data/guidelines")
 DEFAULT_KNOWLEDGE_DIRS = (
     "/app/data,"
@@ -4460,16 +4472,11 @@ def chunk_excluded_for_query(query: str, chunk: KnowledgeChunk) -> bool:
     if not (section12_evidence_grade_query or liver_evidence_grade_query) or kidney_query:
         return False
     origin_haystack = f"{chunk.source} {chunk.source_label} {chunk.title} {chunk.section} {' '.join(chunk.metadata)}".lower()
-    if section12_evidence_grade_query and (
-        CKD_CARDIORENAL_CLAIMS_PATH in origin_haystack
-        or CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in origin_haystack
-        or CKD_CARDIORENAL_EVIDENCE_CARD_PATH in origin_haystack
-    ):
+    if section12_evidence_grade_query and any(marker in origin_haystack for marker in CKD_EVIDENCE_GRADE_EXCLUSION_MARKERS):
         return True
     if liver_evidence_grade_query and (
-        CKD_CARDIORENAL_CLAIMS_PATH in origin_haystack
-        or CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in origin_haystack
-        or CKD_CARDIORENAL_EVIDENCE_CARD_PATH in origin_haystack
+        any(marker in origin_haystack for marker in CKD_EVIDENCE_GRADE_EXCLUSION_MARKERS)
+        or MASLD_CROSS_GUIDELINE_AGGREGATE_SOURCE in origin_haystack
     ):
         return True
     return False
