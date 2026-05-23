@@ -1991,7 +1991,7 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
                 "Recommendation 12.15 and 12.16 vision rehabilitation Grade E",
             ]
             evidence_targets = ["ADA 12.9", "ADA 12.10", "ADA 12.11", "ADA 12.12", "ADA 12.13", "Grade A", "Grade E"]
-            required_facets = ["retinopathy_context", "treatment"]
+            section_required_facets = ["retinopathy_context", "treatment"]
             answer_strategy = (
                 "Answer Section 12 retinopathy treatment evidence grades first. Do not default to CKD/cardiorenal grades. "
                 "For severe diabetic eye disease, name 12.9 referral and the treatment rows 12.10-12.13 before caveats."
@@ -2016,7 +2016,7 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
                 "Recommendation 12.22 opioid tramadol tapentadol avoidance except rare circumstances",
             ]
             evidence_targets = ["ADA 12.20", "ADA 12.21", "ADA 12.22", "Grade A", "Grade B", "Grade C", "Grade E"]
-            required_facets = ["treatment", "medication"]
+            section_required_facets = ["treatment", "medication"]
             answer_strategy = (
                 "Answer Section 12 neuropathy treatment evidence grades first. For medication questions, lead with 12.22: "
                 "initial drug classes are Grade A, combination therapy Grade A, opioids/tramadol/tapentadol should generally not be used except rare circumstances Grade B."
@@ -2040,7 +2040,7 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
                 "Recommendation 12.29 foot specialist referral and smoking cessation grade split",
             ]
             evidence_targets = ["ADA 12.23", "ADA 12.24", "ADA 12.25", "ADA 12.27", "ADA 12.29", "Grade A", "Grade B"]
-            required_facets = ["foot_care", "pad_context", "treatment"]
+            section_required_facets = ["foot_care", "pad_context", "treatment"]
             answer_strategy = (
                 "Answer Section 12 foot/PAD evidence grades first. Keep PAD screening/foot-care grades separate from CKD/cardiorenal drug grades."
             )
@@ -2063,7 +2063,7 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
                 if kidney_grade_context
                 else []
             ),
-            "required_facets": required_facets + (["kidney_context"] if kidney_grade_context else []),
+            "required_facets": section_required_facets + (["kidney_context"] if kidney_grade_context else []),
             "concepts": concepts + (["CKD", "KDIGO 2026", "cardiorenal evidence grades"] if kidney_grade_context else []),
             "target_chapters": ["ADA S12 Retinopathy, Neuropathy, and Foot Care"]
             + (["ADA S11 Chronic Kidney Disease", "KDIGO diabetes management in CKD"] if kidney_grade_context else []),
