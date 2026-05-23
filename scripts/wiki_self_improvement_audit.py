@@ -92,6 +92,8 @@ REVIEW_TERMS = (
     "osteoporosis",
 )
 
+DEFERRED_TOPICS_PATH = Path("_meta/deferred-topics.md")
+
 
 @dataclass
 class Page:
@@ -154,6 +156,19 @@ def load_pages(root: Path) -> list[Page]:
     return pages
 
 
+def load_deferred_topic_slugs(root: Path) -> set[str]:
+    path = root / DEFERRED_TOPICS_PATH
+    if not path.exists():
+        return set()
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    slugs: set[str] = set()
+    for match in re.finditer(r"^\s*(?:-\s*)?slug:\s*`?([a-z0-9-]+)`?\s*$", text, flags=re.M):
+        slugs.add(match.group(1).strip())
+    for match in re.finditer(r"`([a-z0-9-]+)`", text):
+        slugs.add(match.group(1).strip())
+    return slugs
+
+
 def tokenize(text: str) -> set[str]:
     tokens = set(re.findall(r"[a-zA-Z][a-zA-Z0-9+\-.]*|[\u4e00-\u9fff]{2,4}", text.lower()))
     stop = {"guideline", "diabetes", "patient", "clinical", "source", "wiki", "page", "with", "and", "the"}
@@ -190,7 +205,8 @@ def duplicate_candidates(pages: list[Page]) -> list[str]:
     return [item for _, item in sorted(candidates, reverse=True)[:25]]
 
 
-def topic_gaps(pages: list[Page]) -> list[str]:
+def topic_gaps(pages: list[Page], deferred_slugs: set[str] | None = None) -> list[str]:
+    deferred_slugs = deferred_slugs or set()
     searchable = "\n".join(
         f"{p.rel}\n{p.title}\n{' '.join(p.aliases)}\n{' '.join(p.entities)}\n{' '.join(p.tags)}"
         for p in pages
@@ -198,6 +214,8 @@ def topic_gaps(pages: list[Page]) -> list[str]:
     ).lower()
     gaps = []
     for seed in TOPIC_SEEDS:
+        if seed["slug"] in deferred_slugs:
+            continue
         target = seed["suggested_path"].lower()
         if target in searchable:
             continue
@@ -215,6 +233,10 @@ def topic_gaps(pages: list[Page]) -> list[str]:
 
 
 def consistency_review_candidates(pages: list[Page]) -> list[str]:
+    def clean_snippet(line: str) -> str:
+        without_links = re.sub(r"\[\[([^\]]+)\]\]", r"`\1`", line)
+        return re.sub(r"\s+", " ", without_links.strip())[:180]
+
     candidates = []
     for term in REVIEW_TERMS:
         hits = []
@@ -228,7 +250,7 @@ def consistency_review_candidates(pages: list[Page]) -> list[str]:
             lines = []
             for line in page.body.splitlines():
                 if term_re.search(line) and threshold_re.search(line):
-                    lines.append(re.sub(r"\s+", " ", line.strip())[:180])
+                    lines.append(clean_snippet(line))
             if lines:
                 hits.append(f"{page.rel}: {lines[0]}")
         if len(hits) >= 2:
@@ -277,7 +299,7 @@ def write_research_requests(root: Path, gaps: list[str], limit: int) -> list[str
                     "confidence: uncertain",
                     f"last_verified: {today}",
                     "status: open",
-                    "obsidian_type: registry",
+                    "obsidian_type: report",
                     "aliases: []",
                     "entities: [Hermes Agent]",
                     "owner_agent: hermes",
@@ -315,13 +337,42 @@ def main() -> int:
     reports.mkdir(parents=True, exist_ok=True)
 
     duplicates = duplicate_candidates(pages)
-    gaps = topic_gaps(pages)
+    deferred_slugs = load_deferred_topic_slugs(root)
+    gaps = topic_gaps(pages, deferred_slugs)
     consistency = consistency_review_candidates(pages)
     synthetic = synthetic_question_candidates(pages)
     written = write_research_requests(root, gaps, args.request_limit) if args.write_requests else []
 
     today = date.today().isoformat()
     lines = [
+        "---",
+        "title: Wiki Self-Improvement Audit",
+        "summary: Generated proactive lint report for duplicate concepts, topic gaps, consistency review candidates, and synthetic QA seeds.",
+        "type: report",
+        f"created: {today}",
+        f"updated: {today}",
+        "tags: [llm-wiki, self-improvement, audit]",
+        "sources:",
+        "  - _meta/page-registry.json",
+        "  - _meta/claim-registry.json",
+        "evidence_level: local-practice",
+        "clinical_use: workflow",
+        "confidence: high",
+        f"last_verified: {today}",
+        "status: active",
+        "obsidian_type: report",
+        "aliases:",
+        "  - wiki self-improvement audit",
+        "entities:",
+        "  - Hermes Agent",
+        "related:",
+        "  - reports/weekly-wiki-health",
+        "  - reports/source-freshness-watch",
+        "  - _meta/deferred-topics",
+        "owner_agent: hermes",
+        "write_policy: hermes-maintained",
+        "---",
+        "",
         "# Wiki Self-Improvement Audit",
         "",
         f"Generated: {today}",
@@ -335,6 +386,7 @@ def main() -> int:
         f"- Pages scanned: {len(pages)}",
         f"- Duplicate/merge candidates: {len(duplicates)}",
         f"- Topic gaps or under-routed topics: {len(gaps)}",
+        f"- Deferred topic seeds skipped: {len(deferred_slugs)}",
         f"- Consistency review candidates: {len(consistency)}",
         f"- Synthetic QA seed questions: {len(synthetic)}",
         f"- Research requests written: {len(written)}",
@@ -360,6 +412,11 @@ def main() -> int:
             "- Hermes should verify threshold, grade, and medication claims against raw sources before editing canonical clinical pages.",
             "- Safe autonomous edits: aliases, topic-map routes, smoke-test additions, and research-request creation.",
             "- Human review is still preferred before changing exact clinical recommendations.",
+            "",
+            "## Related Pages",
+            "",
+            "- [[../reports/weekly-wiki-health]]",
+            "- [[../reports/source-freshness-watch]]",
         ]
     )
 

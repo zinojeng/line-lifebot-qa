@@ -89,6 +89,32 @@ def write_report(root: Path, records: list[SourceRecord], network: list[dict[str
     }
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     lines = [
+        "---",
+        "title: Source Freshness Watch",
+        "summary: Generated report tracking local guideline source freshness before canonical clinical wiki edits.",
+        "type: report",
+        f"created: {today}",
+        f"updated: {today}",
+        "tags: [llm-wiki, source-freshness, audit]",
+        "sources:",
+        "  - reports/source-freshness-state.json",
+        "evidence_level: local-practice",
+        "clinical_use: workflow",
+        "confidence: high",
+        f"last_verified: {today}",
+        "status: active",
+        "obsidian_type: report",
+        "aliases:",
+        "  - source freshness watch",
+        "entities:",
+        "  - Hermes Agent",
+        "related:",
+        "  - reports/wiki-self-improvement-audit",
+        "  - reports/weekly-wiki-health",
+        "owner_agent: hermes",
+        "write_policy: hermes-maintained",
+        "---",
+        "",
         "# Source Freshness Watch",
         "",
         f"Generated: {today}",
@@ -113,6 +139,16 @@ def write_report(root: Path, records: list[SourceRecord], network: list[dict[str
             )
     else:
         lines.append("- Not checked")
+    lines.extend(
+        [
+            "",
+            "## Related Pages",
+            "",
+            "- [[../reports/wiki-self-improvement-audit]]",
+            "- [[../reports/weekly-wiki-health]]",
+            "",
+        ]
+    )
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return report_path
 

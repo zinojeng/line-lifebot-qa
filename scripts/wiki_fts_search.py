@@ -5,8 +5,63 @@ import argparse
 import json
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+try:
+    from section12_routing import (
+        CKD_CARDIORENAL_CLAIMS_PATH,
+        CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE,
+        CKD_CARDIORENAL_EVIDENCE_CARD_PATH,
+        SECTION12_CLAIM_REGISTRY_PATH,
+        SECTION12_EVIDENCE_CARD_PATH,
+        SECTION12_ROUTER_MOC_PATH,
+        has_kidney_context,
+        has_liver_context,
+        section12_context_query,
+    )
+except ModuleNotFoundError:
+    print("WARNING: section12_routing.py not found; using degraded Section 12 FTS routing fallback.", file=sys.stderr)
+    CKD_CARDIORENAL_CLAIMS_PATH = "claims/ada-kdigo-2026-ckd-cardiorenal-claims"
+    CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE = "ada-kdigo-2026-ckd-cardiorenal-claim-registry"
+    CKD_CARDIORENAL_EVIDENCE_CARD_PATH = "evidence-cards/ada-kdigo-2026-ckd-cardiorenal-recommendation-grades"
+    SECTION12_CLAIM_REGISTRY_PATH = "claims/ada-2026-retinopathy-foot-pad-claims"
+    SECTION12_EVIDENCE_CARD_PATH = "evidence-cards/ada-2026-section-12-retinopathy-neuropathy-foot-pad-recommendation-grades"
+    SECTION12_ROUTER_MOC_PATH = "mocs/evidence-grade-router-moc"
+
+    def section12_context_query(query: str) -> bool:
+        lower = query.lower()
+        return bool(
+            re.search(
+                r"\b(?:retinopathy|retinal|neuropathy|dpn|foot care|diabetic foot|peripheral artery|anti-vegf|gabapentinoid)\b",
+                lower,
+            )
+            or re.search(r"\bPAD\b", query)
+            or re.search(
+                r"視網膜|眼病變|眼底|黃斑|神經病變|周邊神經|神經痛|糖尿病足|周邊動脈|足病|嚴重眼",
+                query,
+            )
+            or bool(re.search(r"\bsection\s*12\b", lower))
+        )
+
+    def has_kidney_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"腎|腎絲球|腎病變|腎衰竭|尿蛋白|白蛋白尿", text)
+            or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone)\b", lower)
+        )
+
+    def has_liver_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"肝|脂肪肝|脂肪性肝炎|代謝性脂肪肝|肝硬化|肝纖維", text)
+            or re.search(r"\b(?:masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fib-4)\b", lower)
+        )
 
 
 DEFAULT_WIKI = Path("/Users/ander/Documents/hermes-agent/wiki/ada-kdigo-diabetes-wiki")
@@ -196,8 +251,11 @@ def pregnancy_pharmacotherapy_query(query: str) -> bool:
 
 
 def kidney_context_query(query: str) -> bool:
-    lower = query.lower()
-    return "腎" in query or any(term in lower for term in ("ckd", "egfr", "kidney", "renal", "uacr", "albuminuria"))
+    return has_kidney_context(query)
+
+
+def liver_context_query(query: str) -> bool:
+    return has_liver_context(query)
 
 
 def rerank_rows(rows: list[sqlite3.Row | dict], query: str, limit: int) -> list[sqlite3.Row | dict]:
@@ -213,11 +271,43 @@ def rerank_rows(rows: list[sqlite3.Row | dict], query: str, limit: int) -> list[
             for key in ("path", "title", "section", "page_type", "frontmatter", "excerpt")
         ).lower()
         if evidence_grade_query(query):
+            section12_grade = section12_context_query(query)
+            liver_grade = liver_context_query(query)
+            kidney_grade = kidney_context_query(query)
+            ckd_grade = kidney_grade
+            specific_grade_route = section12_grade or liver_grade or ckd_grade
+            ckd_cardiorenal_hit = (
+                CKD_CARDIORENAL_CLAIMS_PATH in path
+                or CKD_CARDIORENAL_EVIDENCE_CARD_PATH in path
+                or CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in haystack
+            )
+            if ckd_cardiorenal_hit and (section12_grade or liver_grade) and not kidney_grade:
+                score *= 0.0005
+            if section12_grade and SECTION12_EVIDENCE_CARD_PATH in path:
+                score *= 50.0
+            elif section12_grade and SECTION12_CLAIM_REGISTRY_PATH in path:
+                score *= 35.0
+            elif section12_grade and SECTION12_ROUTER_MOC_PATH in path:
+                score *= 30.0
+            if liver_grade and "masld-mash" in path:
+                score *= 75.0
+            elif liver_grade and any(term in haystack for term in ("masld", "mash", "fatty liver", "脂肪肝", "肝纖維")):
+                score *= 18.0
+            route_matched_claim = (
+                (section12_grade and SECTION12_CLAIM_REGISTRY_PATH in path)
+                or (liver_grade and "masld-mash" in path)
+                or (ckd_grade and ckd_cardiorenal_hit)
+            )
             if page_type == "claim" or path.startswith("claims/"):
-                score *= 8.0
-            if "ada-kdigo-2026-ckd-cardiorenal-claims" in path:
+                if route_matched_claim:
+                    score *= 8.0
+                elif not specific_grade_route:
+                    score *= 3.0
+                else:
+                    score *= 0.18
+            if ckd_grade and ckd_cardiorenal_hit:
                 score *= 20.0
-            if any(term in haystack for term in ("claim_id", "lower-certainty", "grade c", "practice point", "1c")):
+            if route_matched_claim and any(term in haystack for term in ("claim_id", "lower-certainty", "grade c", "practice point", "1c")):
                 score *= 3.0
         if pregnancy_pharmacotherapy_query(query):
             if "ada-2026-gdm-pharmacotherapy" in path:
@@ -275,9 +365,43 @@ def fallback_like_search(conn: sqlite3.Connection, query: str, limit: int) -> li
             count = body.count(term)
             if count:
                 score += min(count, 6) * 1.3
-        if ("claim" in frontmatter or str(row["path"]).startswith("claims/")) and any(term in query for term in ("證據", "建議", "strong", "grade")):
-            score *= 6.0
-        if evidence_grade_query(query) and "ada-kdigo-2026-ckd-cardiorenal-claims" in str(row["path"]):
+        section12_grade = evidence_grade_query(query) and section12_context_query(query)
+        liver_grade = evidence_grade_query(query) and liver_context_query(query)
+        kidney_grade = evidence_grade_query(query) and kidney_context_query(query)
+        ckd_grade = evidence_grade_query(query) and kidney_grade
+        specific_grade_route = section12_grade or liver_grade or ckd_grade
+        path = str(row["path"])
+        row_text = " ".join(str(row[key]).lower() for key in ("title", "section", "frontmatter", "excerpt"))
+        ckd_cardiorenal_hit = (
+            CKD_CARDIORENAL_CLAIMS_PATH in path
+            or CKD_CARDIORENAL_EVIDENCE_CARD_PATH in path
+            or CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in row_text
+        )
+        route_matched_claim = (
+            (section12_grade and SECTION12_CLAIM_REGISTRY_PATH in path)
+            or (liver_grade and "masld-mash" in path)
+            or (ckd_grade and ckd_cardiorenal_hit)
+        )
+        if ("claim" in frontmatter or path.startswith("claims/")) and any(term in query for term in ("證據", "建議", "strong", "grade")):
+            if route_matched_claim:
+                score *= 6.0
+            elif not specific_grade_route:
+                score *= 2.5
+            else:
+                score *= 0.18
+        if ckd_cardiorenal_hit and evidence_grade_query(query) and (section12_grade or liver_grade) and not kidney_grade:
+            score *= 0.0005
+        if section12_grade and SECTION12_EVIDENCE_CARD_PATH in str(row["path"]):
+            score *= 50.0
+        elif section12_grade and SECTION12_CLAIM_REGISTRY_PATH in str(row["path"]):
+            score *= 35.0
+        elif section12_grade and SECTION12_ROUTER_MOC_PATH in str(row["path"]):
+            score *= 30.0
+        if liver_grade and "masld-mash" in str(row["path"]):
+            score *= 75.0
+        elif liver_grade and any(term in body or term in frontmatter for term in ("masld", "mash", "fatty liver", "脂肪肝", "肝纖維")):
+            score *= 18.0
+        if ckd_grade and ckd_cardiorenal_hit:
             score *= 20.0
         if pregnancy_pharmacotherapy_query(query):
             path = str(row["path"])

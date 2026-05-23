@@ -21,6 +21,7 @@ class RegressionCase:
     expected_terms: tuple[str, ...]
     forbidden_terms: tuple[str, ...] = ("片段", "AACE")
     expected_mode: str = "fast_path"
+    forbidden_scope: int = 10
 
 
 BUILTIN_CASES = (
@@ -57,6 +58,24 @@ BUILTIN_CASES = (
         ("15.17", "15.21", "grade a", "grade b", "metformin"),
         forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "禁用", "完全不能使用", "absolutely forbidden"),
     ),
+    RegressionCase(
+        "retinopathy-treatment-evidence-grade",
+        "嚴重眼病變治療 證據等級是？",
+        ("section 12", "12.9", "12.12", "grade a", "anti-vegf", "retinopathy"),
+        forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "ada-kdigo-2026-ckd-cardiorenal-claim-registry", "ckd-cardiorenal-claims", "ckd-cardiorenal-recommendation-grades"),
+    ),
+    RegressionCase(
+        "neuropathy-medication-evidence-grade",
+        "糖尿病神經病變藥物的證據等級是？",
+        ("section 12", "12.22", "grade a", "gabapentinoid", "snri", "opioid"),
+        forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "ada-kdigo-2026-ckd-cardiorenal-claim-registry", "ckd-cardiorenal-claims", "ckd-cardiorenal-recommendation-grades"),
+    ),
+    RegressionCase(
+        "masld-mash-evidence-grade-no-ckd-default",
+        "糖尿病 MASH 建議等級",
+        ("ada 2026 section 4", "4.27a", "fib-4", "glp-1", "mash"),
+        forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "ada-kdigo-2026-ckd-cardiorenal-claim-registry", "ckd-cardiorenal-claims", "ckd-cardiorenal-recommendation-grades", "finerenone", "uacr", "egfr"),
+    ),
 )
 
 
@@ -68,9 +87,9 @@ def fetch_debug(base_url: str, query: str, token: str, timeout: int) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def haystack(payload: dict) -> str:
+def haystack(payload: dict, limit: int = 10) -> str:
     parts = [payload.get("retrieval_mode", ""), payload.get("retrieval_query", "")]
-    for hit in payload.get("candidates", [])[:10]:
+    for hit in payload.get("candidates", [])[:limit]:
         parts.extend(
             [
                 hit.get("source", ""),
@@ -115,7 +134,8 @@ def run_case(base_url: str, case: RegressionCase, token: str, timeout: int) -> t
     mode = payload.get("retrieval_mode", "")
     text = haystack(payload)
     matched = any(term.lower() in text for term in case.expected_terms)
-    forbidden = [term for term in case.forbidden_terms if term.lower() in text]
+    forbidden_text = haystack(payload, limit=case.forbidden_scope)
+    forbidden = [term for term in case.forbidden_terms if term.lower() in forbidden_text]
     ok = mode == case.expected_mode and matched and not forbidden
     message = (
         f"{'PASS' if ok else 'FAIL'}\t{case.name}\tmode={mode}\t"

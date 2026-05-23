@@ -155,6 +155,16 @@ CASES = (
         ("retinopathy", "ada", "screening"),
     ),
     SmokeCase(
+        "retinopathy-treatment-evidence-grade",
+        "嚴重眼病變治療 證據等級是？",
+        ("section 12", "12.9", "12.12", "grade a", "anti-vegf", "retinopathy"),
+    ),
+    SmokeCase(
+        "neuropathy-medication-evidence-grade",
+        "糖尿病神經病變藥物的證據等級是？",
+        ("section 12", "12.22", "grade a", "gabapentinoid", "snri", "opioid"),
+    ),
+    SmokeCase(
         "medical-student-brief",
         "請用 ADA KDIGO 2026 幫醫學生整理糖尿病 CKD 20 分鐘教學重點",
         ("medical student", "teaching", "ada", "kdigo"),

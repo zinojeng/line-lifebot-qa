@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 import tarfile
 import threading
 import inspect
@@ -24,6 +25,27 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
+
+try:
+    from section12_routing import has_kidney_context, has_liver_context, section12_topic_from_context
+except ModuleNotFoundError:
+    print("WARNING: section12_routing.py not found; Section 12 intent routing is disabled.", file=sys.stderr)
+    def has_kidney_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"腎|腎絲球|腎病變|腎衰竭|尿蛋白|白蛋白尿", text)
+            or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone)\b", lower)
+        )
+
+    def has_liver_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"肝|脂肪肝|脂肪性肝炎|代謝性脂肪肝|肝硬化|肝纖維", text)
+            or re.search(r"\b(?:masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fib-4)\b", lower)
+        )
+
+    def section12_topic_from_context(user_text: str, recent_context: str = "") -> str:
+        return ""
 
 try:
     from knowledge import (
@@ -277,7 +299,7 @@ SYSTEM_PROMPT = """你是 LifeBot 糖尿病衛教 LINE 機器人，請用繁體�
 - 回答以 2 到 4 個短段落為主，適合手機閱讀。
 - 只能根據「背景知識檢索」提供的已載入臨床指南、LLM Wiki 知識頁與結構化證據卡回答。
 - 背景知識可能包含 LLM Wiki compiled pages，這是已整理的長期醫學知識層；也可能包含 compiled guideline artifacts，這些是從已上傳 Markdown 指南預先編譯出的 recommendation/table/section/concept/cross-guideline 證據卡。
-- LLM Wiki pages 可作為第一線知識地圖與臨床整理；若問題涉及精確門檻、適應症、禁忌或分級建議，且有父層章節或原始 Markdown 內容，仍以原始 Markdown 指南內容為準。
+- LLM Wiki pages 是已修訂的回答層；若本輪檢索到相關 LLM Wiki 內容，請優先用它組織繁體中文回答。原始 Markdown 指南只作為精確門檻、適應症、禁忌或分級建議的查核依據，不要用原始 Markdown 取代已修訂的 LLM Wiki 回答架構。
 - 不要使用模型內建知識、一般醫學常識、未載入指南、新聞或推測補完。
 - 若問題屬於糖尿病、CKD、高血壓、血脂、心血管風險、肥胖、脂肪肝、骨骼健康或慢性病照護範圍，而且已載入內容有相關依據，請回答已載入內容能支持的部分；若證據不完整，請說明限制，不要直接拒答。
 - 只有在問題明顯離開上述慢性病照護範圍，或本輪完全沒有相關指南或知識庫內容時，才說目前指南知識庫資料不足。
@@ -1866,6 +1888,10 @@ def evidence_grade_followup(user_text: str, recent_context: str = "") -> bool:
     )
 
 
+def section12_evidence_grade_context(user_text: str, recent_context: str = "") -> str:
+    return section12_topic_from_context(user_text, recent_context)
+
+
 def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[str, Any]:
     context_excerpt = context_search_excerpt(recent_context)
     planning_text = f"{user_text} {context_excerpt}" if contextual_guideline_followup(user_text, recent_context) else user_text
@@ -1919,6 +1945,202 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
                 "no loaded guideline evidence",
                 "CKD metformin renal-dose answer",
                 "absolute prohibition of metformin without individualization",
+            ],
+        }
+        return merge_clinical_brain(intent, brain_plan)
+    section12_context = section12_evidence_grade_context(user_text, recent_context)
+    if evidence_grade_followup(user_text, recent_context) and section12_context:
+        kidney_grade_context = has_kidney_context(planning_text)
+        if section12_context == "retinopathy":
+            concepts = [
+                "ADA 2026 Section 12 retinopathy treatment",
+                "diabetic macular edema",
+                "PDR",
+                "NPDR",
+                "anti-VEGF",
+                "panretinal laser photocoagulation",
+                "Evidence Grade Router MOC",
+            ]
+            must_retrieve = [
+                "Evidence Grade Router MOC",
+                "ADA 2026 Section 12 recommendation grades",
+                "Recommendation 12.9 prompt ophthalmology referral",
+                "Recommendation 12.10 panretinal laser photocoagulation",
+                "Recommendation 12.11 anti-VEGF for PDR",
+                "Recommendation 12.12 anti-VEGF first-line for center-involved DME impairing visual acuity",
+                "Recommendation 12.13 focal/grid photocoagulation or corticosteroid for persistent DME or anti-VEGF non-candidates",
+                "Recommendation 12.15 and 12.16 vision rehabilitation Grade E",
+            ]
+            evidence_targets = ["ADA 12.9", "ADA 12.10", "ADA 12.11", "ADA 12.12", "ADA 12.13", "Grade A", "Grade E"]
+            required_facets = ["retinopathy_context", "treatment"]
+            answer_strategy = (
+                "Answer Section 12 retinopathy treatment evidence grades first. Do not default to CKD/cardiorenal grades. "
+                "For severe diabetic eye disease, name 12.9 referral and the treatment rows 12.10-12.13 before caveats."
+            )
+        elif section12_context == "neuropathy":
+            concepts = [
+                "ADA 2026 Section 12 neuropathy treatment",
+                "diabetic peripheral neuropathy",
+                "neuropathic pain pharmacotherapy",
+                "gabapentinoids",
+                "SNRI",
+                "TCA",
+                "sodium channel blockers",
+                "Evidence Grade Router MOC",
+            ]
+            must_retrieve = [
+                "Evidence Grade Router MOC",
+                "ADA 2026 Section 12 recommendation grades",
+                "Recommendation 12.20 neuropathy prevention/progression grade split",
+                "Recommendation 12.21 painful DPN and autonomic symptom treatment",
+                "Recommendation 12.22 gabapentinoids SNRIs TCAs sodium channel blockers initial pharmacologic treatments",
+                "Recommendation 12.22 opioid tramadol tapentadol avoidance except rare circumstances",
+            ]
+            evidence_targets = ["ADA 12.20", "ADA 12.21", "ADA 12.22", "Grade A", "Grade B", "Grade C", "Grade E"]
+            required_facets = ["treatment", "medication"]
+            answer_strategy = (
+                "Answer Section 12 neuropathy treatment evidence grades first. For medication questions, lead with 12.22: "
+                "initial drug classes are Grade A, combination therapy Grade A, opioids/tramadol/tapentadol should generally not be used except rare circumstances Grade B."
+            )
+        else:
+            concepts = [
+                "ADA 2026 Section 12 foot care PAD",
+                "diabetic foot care",
+                "PAD screening",
+                "LOPS",
+                "ABI with toe pressures",
+                "Evidence Grade Router MOC",
+            ]
+            must_retrieve = [
+                "Evidence Grade Router MOC",
+                "ADA 2026 Section 12 recommendation grades",
+                "Recommendation 12.23 annual comprehensive foot evaluation",
+                "Recommendation 12.24 foot exam components",
+                "Recommendation 12.25 every-visit foot inspection for high risk",
+                "Recommendation 12.27 PAD screening and ABI with toe pressures",
+                "Recommendation 12.29 foot specialist referral and smoking cessation grade split",
+            ]
+            evidence_targets = ["ADA 12.23", "ADA 12.24", "ADA 12.25", "ADA 12.27", "ADA 12.29", "Grade A", "Grade B"]
+            required_facets = ["foot_care", "pad_context", "treatment"]
+            answer_strategy = (
+                "Answer Section 12 foot/PAD evidence grades first. Keep PAD screening/foot-care grades separate from CKD/cardiorenal drug grades."
+            )
+        intent = {
+            "clinical_intent": (
+                f"mixed_ckd_ada_section12_{section12_context}_evidence_grade_followup"
+                if kidney_grade_context
+                else f"ada_section12_{section12_context}_evidence_grade_followup"
+            ),
+            "question_type": "evidence_grade_comparison",
+            "patient_context": [user_text, context_excerpt],
+            "must_retrieve": must_retrieve
+            + (
+                [
+                    "ADA/KDIGO CKD cardiorenal claim registry",
+                    "ADA 2026 Section 11 CKD recommendations",
+                    "KDIGO 2026 diabetes management in CKD recommendations",
+                    "SGLT2i eGFR and albuminuria recommendation grades",
+                ]
+                if kidney_grade_context
+                else []
+            ),
+            "required_facets": required_facets + (["kidney_context"] if kidney_grade_context else []),
+            "concepts": concepts + (["CKD", "KDIGO 2026", "cardiorenal evidence grades"] if kidney_grade_context else []),
+            "target_chapters": ["ADA S12 Retinopathy, Neuropathy, and Foot Care"]
+            + (["ADA S11 Chronic Kidney Disease", "KDIGO diabetes management in CKD"] if kidney_grade_context else []),
+            "evidence_targets": evidence_targets
+            + (["ADA 11.7a", "ADA 11.11a", "KDIGO 4.3.1", "KDIGO GRADE"] if kidney_grade_context else []),
+            "avoid_routes": (
+                ["Do not answer as CKD-only or Section-12-only; keep CKD/KDIGO and ADA Section 12 evidence grades in separate buckets."]
+                if kidney_grade_context
+                else ["CKD/cardiorenal evidence cards unless the user also asks kidney disease, eGFR, UACR, SGLT2i, GLP-1RA, finerenone, ACEi/ARB, or KDIGO"]
+            ),
+            "answer_strategy": (
+                answer_strategy
+                + " Because CKD/KDIGO context is also present, retrieve and answer CKD/cardiorenal evidence grades as a separate bucket."
+                if kidney_grade_context
+                else answer_strategy
+            ),
+            "do_not_answer_with": [
+                "no loaded guideline evidence",
+                "CKD/cardiorenal-only evidence grade answer",
+                "invented recommendation grades",
+            ],
+        }
+        return merge_clinical_brain(intent, brain_plan)
+    if evidence_grade_followup(user_text, recent_context) and has_liver_context(planning_text):
+        kidney_grade_context = has_kidney_context(planning_text)
+        intent = {
+            "clinical_intent": (
+                "mixed_ckd_ada_section4_masld_mash_evidence_grade_followup"
+                if kidney_grade_context
+                else "ada_section4_masld_mash_evidence_grade_followup"
+            ),
+            "question_type": "evidence_grade_comparison",
+            "patient_context": [user_text, context_excerpt],
+            "must_retrieve": [
+                "Evidence Grade Router MOC",
+                "ADA 2026 Section 4 MASLD MASH claim cards",
+                "ADA 4.22a FIB-4 screening recommendation grade",
+                "ADA 4.25 liver stiffness measurement recommendation grade",
+                "ADA 4.26 multidisciplinary care recommendation grade",
+                "ADA 4.27a weight loss and GLP-1 RA pioglitazone tirzepatide recommendation grades",
+                "ADA 4.28 resmetirom recommendation grade",
+                "ADA 4.31a/4.31b cirrhosis care and ADA 4.32a/4.32b metabolic surgery recommendation grades",
+            ]
+            + (
+                [
+                    "ADA/KDIGO CKD cardiorenal claim registry",
+                    "ADA 2026 Section 11 CKD recommendations",
+                    "KDIGO diabetes management in CKD recommendations",
+                ]
+                if kidney_grade_context
+                else []
+            ),
+            "required_facets": ["liver_context", "evidence_grade"] + (["kidney_context"] if kidney_grade_context else []),
+            "concepts": [
+                "MASLD",
+                "MASH",
+                "FIB-4",
+                "liver fibrosis",
+                "GLP-1 RA",
+                "pioglitazone",
+                "tirzepatide",
+                "resmetirom",
+                "ADA 2026 Section 4",
+                "Evidence Grade Router MOC",
+            ]
+            + (["CKD", "KDIGO 2026", "cardiorenal evidence grades"] if kidney_grade_context else []),
+            "target_chapters": ["ADA S4 Comprehensive Medical Evaluation and Assessment of Comorbidities"]
+            + (["ADA S11 Chronic Kidney Disease", "KDIGO diabetes management in CKD"] if kidney_grade_context else []),
+            "evidence_targets": [
+                "ADA 4.22a",
+                "ADA 4.25",
+                "ADA 4.26",
+                "ADA 4.27a",
+                "ADA 4.28",
+                "ADA 4.31a",
+                "ADA 4.32a",
+                "ADA 4.32b",
+                "Grade A",
+                "Grade B",
+                "Grade C",
+            ]
+            + (["ADA 11.7a", "ADA 11.11a", "KDIGO GRADE"] if kidney_grade_context else []),
+            "avoid_routes": (
+                ["Do not answer as CKD-only or MASLD-only; keep CKD/KDIGO and ADA Section 4 evidence grades in separate buckets."]
+                if kidney_grade_context
+                else ["CKD/cardiorenal evidence cards unless the user also asks kidney disease, eGFR, UACR, SGLT2i, GLP-1RA, finerenone, ACEi/ARB, or KDIGO"]
+            ),
+            "answer_strategy": (
+                "Answer ADA 2026 Section 4 MASLD/MASH evidence grades first. Mention FIB-4, liver stiffness or ELF testing, "
+                "weight loss/lifestyle, GLP-1 RA/pioglitazone/tirzepatide, resmetirom, and cirrhosis care only when supported by retrieved claim cards. "
+                "Do not default to CKD/cardiorenal grades merely because the user asks 建議等級."
+            ),
+            "do_not_answer_with": [
+                "no loaded guideline evidence",
+                "CKD/cardiorenal-only evidence grade answer",
+                "invented recommendation grades",
             ],
         }
         return merge_clinical_brain(intent, brain_plan)
@@ -2068,6 +2290,9 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "若使用者提到住院/病房/inpatient/hospitalized 加上類固醇/glucocorticoid/steroid/corticosteroid/prednisone/prednisolone/dexamethasone 與高血糖，請理解為 glucocorticoid-associated inpatient hyperglycemia；target_chapters 應包含 ADA S16 和 ADA S9；evidence_targets 應包含 NPH insulin with prednisone/prednisolone、basal insulin for dexamethasone or continuous glucocorticoids、prandial/correction insulin increases、daily adjustment、POC blood glucose monitoring；required_facets 應包含 hospital_context, steroid_context, treatment。"
         "若使用者提到 GDM、gestational diabetes、妊娠糖尿病、懷孕糖尿病，加上 metformin、glyburide、insulin、藥物、口服藥或 pharmacotherapy，請理解為 ADA S15 pregnancy pharmacotherapy；target_chapters 應包含 ADA S15；evidence_targets 應包含 Recommendation 15.15、15.17、15.21、insulin preferred agent for GDM、metformin/glyburide not first-line、cross placenta、may not be sufficient for glycemic goals、other oral/noninsulin agents lack long-term safety data；required_facets 應包含 pregnancy, medication, treatment；avoid_routes 要說不要只走 CKD metformin。"
         "若使用者提到骨質疏鬆、骨鬆、骨折、骨密度、骨骼健康、osteoporosis、bone health、fracture、BMD、DXA、T-score 或 FRAX，請理解為 diabetes bone health / osteoporosis；target_chapters 應包含 ADA S4 Comprehensive Medical Evaluation；evidence_targets 應包含 recommendations 4.8-4.13b、fracture risk assessment、DXA/BMD monitoring、T-score <= -2.5、T-score -2.0 to -2.5 with additional risk factors、fragility fracture、FRAX、TZD/sulfonylurea fracture risk、hypoglycemia/falls、calcium/vitamin D；required_facets 應包含 bone_health, fracture_risk, treatment；avoid_routes 要說不要只用視網膜、足部、PAD 或 CKD 內容回答，也不要在已檢索到 FRAX/T-score/DXA 時說缺乏這些資訊。"
+        "若短 follow-up 問「證據等級/建議等級」且最近脈絡是視網膜病變、嚴重眼病變、DME、PDR、NPDR、anti-VEGF、雷射、眼科，請理解為 ADA S12 retinopathy treatment evidence grade；target_chapters 應包含 ADA S12；evidence_targets 應包含 12.9-12.16、Grade A、Grade E；avoid_routes 要說不要預設走 CKD/cardiorenal evidence cards。"
+        "若短 follow-up 問「藥物的證據等級/治療等級」且最近脈絡是神經病變、DPN、神經痛、gabapentinoids、SNRI、TCA、sodium channel blocker、opioid、tramadol，請理解為 ADA S12 neuropathy treatment evidence grade；evidence_targets 應包含 12.20、12.21、12.22、Grade A/B/C/E；required_facets 應包含 medication, treatment。"
+        "若短 follow-up 問證據等級且最近脈絡是糖尿病足、PAD、周邊動脈、LOPS、monofilament、ABI、toe pressure，請理解為 ADA S12 foot/PAD recommendation grade；evidence_targets 應包含 12.23-12.29、Grade A/B；required_facets 應包含 foot_care, pad_context。"
         "若本次問題很短，像「哪些證據等級較低」、「哪些是 strong recommendation」、「那證據等級呢」，請使用最近對話脈絡還原上一題的疾病、藥物與指南範圍；question_type 應是 evidence_grade_comparison，required_facets 至少包含 medication, treatment，evidence_targets 應包含 recommendation strength、evidence grade、strong/conditional、grade 1/2、A/B/C/D、expert consensus。不要把這種短 follow-up 判成 out-of-scope。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
         "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
@@ -2138,6 +2363,9 @@ def build_retrieval_query(
         "若問題提到 HHNK、HHS、高滲透壓、高血糖高滲透壓、酮酸中毒、酮酸、DKA 或高血糖急症，請加入 ADA section 16、dc26s016、hyperglycemic crises、DKA、diabetic ketoacidosis、HHS、hyperosmolar hyperglycemic state、diagnostic criteria、Table 16.1、intravenous fluids、insulin、electrolytes、potassium、osmolality、ketones、pH、bicarbonate、transition to subcutaneous insulin、precipitating cause；並避免搜尋 GDM/outpatient diagnosis criteria。"
         "若問題提到住院/病房/inpatient/hospitalized 加上類固醇/glucocorticoid/steroid/corticosteroid/prednisone/prednisolone/dexamethasone 與高血糖，請加入 ADA section 16、dc26s016、glucocorticoid therapy、steroid-induced hyperglycemia、NPH insulin、prednisone、prednisolone、dexamethasone、basal insulin、prandial insulin、correction insulin、point-of-care blood glucose monitoring、ADA section 9、recommendation 9.36、frequent reassessment。"
         "若問題提到 GDM、gestational diabetes、妊娠糖尿病、懷孕糖尿病，加上 metformin、glyburide、insulin、藥物、口服藥或 pharmacotherapy，請加入 ADA section 15、dc26s015、Recommendation 15.15、15.17、15.21、insulin preferred agent、metformin glyburide not first-line、cross placenta、may not be sufficient to achieve glycemic goals、long-term safety data。"
+        "若本次問題是短 follow-up，詢問證據等級、strong recommendation、conditional recommendation、grade 1/2、A/B/C/D 或哪些證據較低，且最近脈絡含視網膜病變、眼病變、DME、NPDR、PDR、anti-VEGF、雷射或眼科，請加入 Evidence Grade Router MOC、ADA section 12、dc26s012、Retinopathy Neuropathy and Foot Care、Recommendation 12.9、12.10、12.11、12.12、12.13、12.15、12.16、retinopathy treatment evidence grade、DME、PDR、anti-VEGF、panretinal laser photocoagulation、vision rehabilitation。"
+        "若本次問題是短 follow-up，詢問藥物或治療的證據等級，且最近脈絡含神經病變、DPN、神經痛、gabapentinoids、SNRI、TCA、sodium channel blocker、opioid、tramadol 或 tapentadol，請加入 Evidence Grade Router MOC、ADA section 12、dc26s012、Recommendation 12.20、12.21、12.22、diabetic neuropathy treatment grade、neuropathic pain medication grade diabetes。"
+        "若本次問題是短 follow-up，詢問證據等級且最近脈絡含糖尿病足、foot、PAD、周邊動脈、LOPS、monofilament、ABI 或 toe pressure，請加入 Evidence Grade Router MOC、ADA section 12、dc26s012、Recommendation 12.23、12.24、12.25、12.27、12.29、foot PAD recommendation grade。"
         "若本次問題是短 follow-up，詢問證據等級、strong recommendation、conditional recommendation、grade 1/2、A/B/C/D 或哪些證據較低，請從最近對話脈絡帶入上一題的疾病、用藥與指南範圍，並加入 ADA 2026、KDIGO 2026、recommendation strength、evidence grade、strong recommendation、conditional recommendation、expert consensus、SGLT2 inhibitor、GLP-1 RA、metformin、insulin、finerenone、CKD、ASCVD、albuminuria。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"

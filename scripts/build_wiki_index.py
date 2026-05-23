@@ -66,7 +66,14 @@ def sections(body: str) -> list[str]:
 
 
 def wikilinks(text: str) -> list[str]:
-    return sorted(set(match.strip() for match in re.findall(r"\[\[([^\]|#]+)", text) if match.strip()))
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    ignored = {"...", "wikilinks", "related-page-1", "related-page-2", "related-concept-a", "related-concept-b"}
+    links = []
+    for match in re.findall(r"\[\[([^\]|#]+)", text):
+        link = match.strip()
+        if link and link not in ignored:
+            links.append(link)
+    return sorted(set(links))
 
 
 def page_record(root: Path, path: Path) -> dict[str, Any]:
@@ -140,7 +147,11 @@ def build(root: Path) -> dict[str, Any]:
     claims = claim_records(root, records)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "wiki_root": str(root),
+        # Keep wiki_root backwards-compatible for existing operators that treat
+        # it as absolute. Portable consumers can use wiki_root_portable instead.
+        "wiki_root": str(root.resolve()),
+        "wiki_root_portable": ".",
+        "wiki_root_absolute": str(root.resolve()),
         "page_count": len(records),
         "maintained_page_count": len(maintained),
         "claim_count": len(claims),
@@ -166,7 +177,16 @@ def write_outputs(root: Path, payload: dict[str, Any]) -> tuple[Path, Path, Path
     claim_registry_path = meta / "claim-registry.json"
     index_payload = {
         key: payload[key]
-        for key in ("generated_at", "wiki_root", "page_count", "maintained_page_count", "claim_count", "top_level_counts")
+        for key in (
+            "generated_at",
+            "wiki_root",
+            "wiki_root_portable",
+            "wiki_root_absolute",
+            "page_count",
+            "maintained_page_count",
+            "claim_count",
+            "top_level_counts",
+        )
     }
     index_payload["pages"] = [
         {

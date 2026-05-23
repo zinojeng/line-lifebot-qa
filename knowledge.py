@@ -9,11 +9,81 @@ import hashlib
 import math
 import os
 import re
+import sys
 import threading
 from time import monotonic as time_monotonic
 import urllib.error
 import urllib.request
 from typing import Any, Iterable
+
+try:
+    from section12_routing import (
+        CKD_CARDIORENAL_CLAIMS_PATH,
+        CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE,
+        CKD_CARDIORENAL_EVIDENCE_CARD_PATH,
+        SECTION12_CLAIM_REGISTRY_PATH,
+        SECTION12_EVIDENCE_CARD_PATH,
+        SECTION12_ROUTER_MOC_PATH,
+        has_foot_pad_context,
+        has_kidney_context,
+        has_liver_context,
+        has_neuropathy_context,
+        has_retinopathy_context,
+    )
+except ModuleNotFoundError:
+    print("WARNING: section12_routing.py not found; using degraded Section 12 knowledge fallback.", file=sys.stderr)
+    CKD_CARDIORENAL_CLAIMS_PATH = "claims/ada-kdigo-2026-ckd-cardiorenal-claims"
+    CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE = "ada-kdigo-2026-ckd-cardiorenal-claim-registry"
+    CKD_CARDIORENAL_EVIDENCE_CARD_PATH = "evidence-cards/ada-kdigo-2026-ckd-cardiorenal-recommendation-grades"
+    SECTION12_CLAIM_REGISTRY_PATH = "claims/ada-2026-retinopathy-foot-pad-claims"
+    SECTION12_EVIDENCE_CARD_PATH = "evidence-cards/ada-2026-section-12-retinopathy-neuropathy-foot-pad-recommendation-grades"
+    SECTION12_ROUTER_MOC_PATH = "mocs/evidence-grade-router-moc"
+
+    def has_neuropathy_context(text: str) -> bool:
+        lower = text.lower()
+        direct_ascii = re.search(r"\b(?:neuropathy|peripheral neuropathy|autonomic neuropathy|dpn|neuropathic pain)\b", lower)
+        drug_with_context = re.search(
+            r"\b(?:gabapentin|pregabalin|duloxetine|sodium channel blocker|tramadol|tapentadol|opioid|gabapentinoid)\b",
+            lower,
+        ) and re.search(r"\b(?:diabetic|diabetes|neuropathic|neuropathy|dpn)\b|糖尿病|神經痛|神經病變", text, flags=re.I)
+        direct_cjk = re.search(
+            r"神經病變|周邊神經|神經痛|手麻(?!醉|煩|將)|腳麻(?!醉|煩|將)|足麻(?!醉|煩|將)|麻木|麻木感|刺痛|刺刺麻麻|灼熱痛|腳灼熱|足灼熱|發麻(?!醉|煩|將)|麻麻的",
+            text,
+        )
+        clinical_numbness = re.search(
+            r"(?:手|腳|足|腿).{0,2}麻(?!醉|煩|將)|糖尿病.{0,8}麻(?!醉|煩|將)|麻(?!醉|煩|將).{0,8}糖尿病",
+            text,
+        )
+        return bool(direct_ascii or drug_with_context or direct_cjk or clinical_numbness)
+
+    def has_retinopathy_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"\b(?:retinopathy|retinal|macular edema|dme|npdr|pdr|anti-vegf|photocoagulation|vitrectomy|ophthalmologist)\b", lower)
+            or re.search(r"視網膜|眼病變|眼底|黃斑|眼科|嚴重眼|(?:眼|視網膜|黃斑).{0,4}雷射|雷射.{0,4}(?:眼|視網膜|黃斑)", text)
+        )
+
+    def has_foot_pad_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"\bPAD\b", text)
+            or re.search(r"\b(?:diabetic foot|foot care|foot ulcer|peripheral artery|peripheral arterial|lops|monofilament|toe pressure|podiatrist)\b", lower)
+            or re.search(r"糖尿病足|周邊動脈|下肢動脈|踝肱|足病", text)
+        )
+
+    def has_kidney_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"腎|腎絲球|腎病變|腎衰竭|尿蛋白|白蛋白尿", text)
+            or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone)\b", lower)
+        )
+
+    def has_liver_context(text: str) -> bool:
+        lower = text.lower()
+        return bool(
+            re.search(r"肝|脂肪肝|脂肪性肝炎|代謝性脂肪肝|肝硬化|肝纖維", text)
+            or re.search(r"\b(?:masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|cirrhosis|fib-4)\b", lower)
+        )
 
 
 DEFAULT_KNOWLEDGE_DIR = os.getenv("LINE_KNOWLEDGE_DIR", "/app/data/guidelines")
@@ -517,6 +587,8 @@ class KnowledgeBase:
         candidate_indexes = self.search_candidate_indexes(query_tokens, use_dense=bool(dense_query_vector))
         for index in candidate_indexes:
             chunk = self.chunks[index]
+            if chunk_excluded_for_query(query, chunk):
+                continue
             score = self._score(query_tokens, chunk)
             if query_vector and index < len(self.vector_index):
                 score += sparse_cosine(query_vector, self.vector_index[index]) * vector_weight
@@ -569,6 +641,8 @@ class KnowledgeBase:
         vector_weight = float(os.getenv("LINE_KNOWLEDGE_FAST_PATH_VECTOR_WEIGHT", "0.45"))
         scored: list[tuple[float, KnowledgeChunk]] = []
         for chunk in chunks:
+            if chunk_excluded_for_query(query, chunk):
+                continue
             score = self._score(query_tokens, chunk)
             if query_vector:
                 score += sparse_cosine(query_vector, hashed_vector(chunk.tokens)) * vector_weight
@@ -764,6 +838,8 @@ _knowledge_cache: KnowledgeBase | None = None
 _knowledge_cache_key: tuple[str, int] | None = None
 _keyword_lock = threading.Lock()
 _keyword_cache: tuple[tuple[str, ...], list[KeywordEntry]] | None = None
+_link_strength_lock = threading.Lock()
+_link_strength_cache: tuple[tuple[tuple[str, float], ...], dict[str, float]] | None = None
 
 
 def knowledge_enabled() -> bool:
@@ -810,6 +886,16 @@ def llm_wiki_first_enabled() -> bool:
     }
 
 
+def llm_wiki_link_strength_boost_enabled() -> bool:
+    return os.getenv("LINE_LLM_WIKI_LINK_STRENGTH_BOOST_ENABLED", "0").strip().lower() not in {
+        "",
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
 def llm_wiki_dirs() -> list[Path]:
     raw = os.getenv("LINE_LLM_WIKI_DIRS", DEFAULT_LLM_WIKI_DIRS)
     if raw.strip().lower() in {"", "0", "false", "no", "off"}:
@@ -830,6 +916,65 @@ def llm_wiki_dirs() -> list[Path]:
 
 def llm_wiki_existing_dirs() -> list[Path]:
     return [path for path in llm_wiki_dirs() if path.exists() and path.is_dir()]
+
+
+def llm_wiki_link_strength_scores() -> dict[str, float]:
+    files = [root / "_meta" / "link-strength.json" for root in llm_wiki_existing_dirs()]
+    existing = [path for path in files if path.exists() and path.is_file()]
+    cache_key = tuple((str(path), path.stat().st_mtime) for path in existing)
+    global _link_strength_cache
+    if _link_strength_cache and _link_strength_cache[0] == cache_key:
+        return _link_strength_cache[1]
+    with _link_strength_lock:
+        if _link_strength_cache and _link_strength_cache[0] == cache_key:
+            return _link_strength_cache[1]
+        scores: dict[str, float] = {}
+        for path in existing:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            for group in ("top_nodes", "weak_nodes"):
+                for row in payload.get(group, []):
+                    if not isinstance(row, dict):
+                        continue
+                    page_path = str(row.get("path") or "")
+                    if not page_path:
+                        continue
+                    try:
+                        score = float(row.get("score", 0.0))
+                    except (TypeError, ValueError):
+                        continue
+                    scores[page_path] = max(scores.get(page_path, 0.0), score)
+                    if page_path.endswith(".md"):
+                        stem = page_path.removesuffix(".md")
+                        scores[stem] = max(scores.get(stem, 0.0), score)
+        _link_strength_cache = (cache_key, scores)
+        return scores
+
+
+def llm_wiki_relative_path_from_chunk(chunk: KnowledgeChunk) -> str:
+    for item in chunk.metadata:
+        if item.startswith("wiki_page:"):
+            return item.split(":", 1)[1]
+    parts = chunk.source.split("/", 1)
+    return parts[1] if len(parts) == 2 else chunk.source
+
+
+def llm_wiki_link_strength_adjustment(chunk: KnowledgeChunk) -> float:
+    if chunk.chunk_type != "llm_wiki_page" or not llm_wiki_link_strength_boost_enabled():
+        return 1.0
+    relative_path = llm_wiki_relative_path_from_chunk(chunk)
+    score = llm_wiki_link_strength_scores().get(relative_path) or llm_wiki_link_strength_scores().get(relative_path.removesuffix(".md"))
+    if not score:
+        return 1.0
+    stable_threshold = float(os.getenv("LINE_LLM_WIKI_LINK_STRENGTH_STABLE_THRESHOLD", "18.0"))
+    if score < stable_threshold:
+        return 1.0
+    max_boost = max(1.0, float(os.getenv("LINE_LLM_WIKI_LINK_STRENGTH_MAX_BOOST", "1.08")))
+    saturation = max(stable_threshold + 1.0, float(os.getenv("LINE_LLM_WIKI_LINK_STRENGTH_SATURATION", "60.0")))
+    fraction = min(1.0, max(0.0, (score - stable_threshold) / (saturation - stable_threshold)))
+    return 1.0 + (max_boost - 1.0) * fraction
 
 
 def knowledge_dir() -> Path:
@@ -1774,7 +1919,7 @@ def llm_wiki_chunks_from_page(
                 f"Status: {status or 'not specified'}",
                 f"Aliases: {aliases}" if aliases else "",
                 f"Entities: {entities}" if entities else "",
-                "Role: Use this as first-line compiled knowledge. Verify exact clinical thresholds against raw guideline Markdown when needed.",
+                "Role: Use this revised LLM-Wiki page as the first-line answer scaffold for Traditional Chinese responses. Use raw guideline Markdown only to verify exact thresholds, indications, contraindications, or recommendation grades when needed.",
                 "",
                 compact,
             ]
@@ -2297,6 +2442,8 @@ def knowledge_status() -> dict[str, object]:
         "compiled_artifacts": kb.compiled_artifact_count if kb else 0,
         "llm_wiki_enabled": llm_wiki_enabled(),
         "llm_wiki_first_enabled": llm_wiki_first_enabled(),
+        "llm_wiki_link_strength_boost_enabled": llm_wiki_link_strength_boost_enabled(),
+        "llm_wiki_link_strength_scores": len(llm_wiki_link_strength_scores()) if llm_wiki_link_strength_boost_enabled() else 0,
         "llm_wiki_dirs": [str(path) for path in wiki_dirs],
         "llm_wiki_existing_dirs": [str(path) for path in wiki_existing_dirs],
         "llm_wiki_files": wiki_file_count,
@@ -3265,13 +3412,9 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
         term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "fatty liver")
     ):
         concepts.add("liver")
-    if any(term in query for term in ("視網膜", "眼底", "黃斑")) or any(
-        term in lower for term in ("retinopathy", "retinal", "macular edema", "dme", "npdr", "pdr")
-    ):
+    if has_retinopathy_context(query):
         concepts.add("retinopathy")
-    if any(term in query for term in ("神經病變", "神經痛", "麻", "刺痛")) or any(
-        term in lower for term in ("neuropathy", "peripheral neuropathy", "autonomic neuropathy")
-    ):
+    if has_neuropathy_context(query):
         concepts.add("neuropathy")
     if any(term in query for term in ("足部", "腳", "傷口", "潰瘍")) or any(
         term in lower for term in ("foot", "ulcer", "monofilament", "pad", "wound")
@@ -3294,7 +3437,7 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
             "toe pressure",
             "revascularization",
         )
-    ):
+    ) or has_foot_pad_context(query):
         concepts.update({"pad", "ascvd"})
     if any(term in query for term in ("骨質疏鬆", "骨鬆", "骨折", "骨密度", "骨骼")) or any(
         term in lower for term in ("osteoporosis", "bone health", "fracture", "fragility fracture", "bone mineral density", "bmd", "dxa", "t-score", "frax")
@@ -3894,9 +4037,7 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     glycemic_goal_query = any(term in query for term in ("血糖控制", "控制目標", "血糖目標", "目標")) or any(
         term in query_lower for term in ("glycemic goal", "glycemic target", "glucose target", "a1c goal")
     )
-    kidney_query = any(term in query for term in ("腎", "腎絲球", "腎病變", "腎衰竭", "尿蛋白", "白蛋白尿")) or any(
-        term in query_lower for term in ("ckd", "kidney", "renal", "egfr", "uacr", "albuminuria", "proteinuria")
-    )
+    kidney_query = has_kidney_context(query)
     kidney_medication_query = kidney_query and (
         any(term in query for term in ("藥", "用藥", "降血糖", "合併")) or any(
             term in query_lower
@@ -3930,12 +4071,11 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         term in query_lower for term in ("hhnk", "hhs", "dka", "ketoacidosis", "hyperosmolar", "hyperglycemic crisis", "hyperglycemic crises")
     )
     steroid_hospital_query = "hospital_steroid_hyperglycemia" in query_concepts(query, query_lower)
-    liver_query = any(term in query for term in ("肝", "脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
-        term in query_lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
-    )
+    liver_query = has_liver_context(query)
     concepts = query_concepts(query, query_lower)
     desired_compiled_concepts = desired_compiled_concepts_for_query(query, query_lower)
     retinopathy_query = "retinopathy" in concepts
+    neuropathy_query = "neuropathy" in concepts
     pad_query = "pad" in concepts
     staging_query = "staging" in concepts
     treatment_query = "treatment" in concepts
@@ -3972,6 +4112,7 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 0.58
     if chunk.chunk_type == "llm_wiki_page":
         adjustment *= 8.5 if llm_wiki_first_enabled() else 1.15
+        adjustment *= llm_wiki_link_strength_adjustment(chunk)
     if chunk.chunk_type in {"compiled_concept", "compiled_cross_guideline"} and desired_compiled_concepts:
         matched_compiled_concept = any(f"clinical_concept:{concept}" in haystack for concept in desired_compiled_concepts)
         adjustment *= 8.0 if matched_compiled_concept else 0.0001
@@ -3981,13 +4122,40 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 0.05
     if re.search(r"\b(reference|references|acknowledg|appendix)\b", haystack):
         adjustment *= 0.35
-    if evidence_grade_query and "claims/ada-kdigo-2026-ckd-cardiorenal-claims" in haystack:
+    section12_evidence_grade_query = evidence_grade_query and (retinopathy_query or neuropathy_query or pad_query)
+    liver_evidence_grade_query = evidence_grade_query and liver_query
+    ckd_cardiorenal_hit = (
+        CKD_CARDIORENAL_CLAIMS_PATH in haystack
+        or CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in haystack
+        or CKD_CARDIORENAL_EVIDENCE_CARD_PATH in haystack
+    )
+    if evidence_grade_query and ckd_cardiorenal_hit and (section12_evidence_grade_query or liver_evidence_grade_query) and not kidney_query:
+        adjustment *= 0.0005
+    if section12_evidence_grade_query and SECTION12_EVIDENCE_CARD_PATH in haystack:
+        adjustment *= 500.0
+    elif section12_evidence_grade_query and SECTION12_CLAIM_REGISTRY_PATH in haystack:
+        adjustment *= 300.0
+    elif section12_evidence_grade_query and SECTION12_ROUTER_MOC_PATH in haystack:
+        adjustment *= 250.0
+    if liver_evidence_grade_query and "claims/ada-2026-masld-mash-claims" in haystack:
         adjustment *= 900.0
-    if evidence_grade_query and "ada-kdigo-2026-ckd-cardiorenal-claim-registry" in haystack:
+    elif liver_evidence_grade_query and "diabetes-masld-mash" in haystack:
+        adjustment *= 220.0
+    elif liver_evidence_grade_query and re.search(r"\b(masld|mash|fib-4|grade a|grade b|grade c|4\.27a|4\.31a|4\.32a|4\.32b)\b|脂肪肝|肝纖維", haystack):
+        adjustment *= 45.0
+    ckd_evidence_grade_query = evidence_grade_query and kidney_query
+    if ckd_evidence_grade_query and CKD_CARDIORENAL_CLAIMS_PATH in haystack:
+        adjustment *= 900.0
+    if ckd_evidence_grade_query and CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in haystack:
         adjustment *= 600.0
-    if evidence_grade_query and "evidence-cards/ada-kdigo-2026-ckd-cardiorenal-recommendation-grades" in haystack:
+    if ckd_evidence_grade_query and CKD_CARDIORENAL_EVIDENCE_CARD_PATH in haystack:
         adjustment *= 150.0
-    if evidence_grade_query and re.search(r"\b(claim_id|lower-certainty|lower certainty|practice point|grade c|1c|strong recommendation|recommendation grade)\b|哪些證據等級較低|哪些是 strong recommendation", haystack):
+    route_matched_evidence_claim = (
+        (ckd_evidence_grade_query and ckd_cardiorenal_hit)
+        or (section12_evidence_grade_query and (SECTION12_EVIDENCE_CARD_PATH in haystack or SECTION12_CLAIM_REGISTRY_PATH in haystack))
+        or (liver_evidence_grade_query and "masld-mash" in haystack)
+    )
+    if route_matched_evidence_claim and re.search(r"\b(claim_id|lower-certainty|lower certainty|practice point|grade c|1c|strong recommendation|recommendation grade)\b|哪些證據等級較低|哪些是 strong recommendation", haystack):
         adjustment *= 12.0
     if pregnancy_medication_query and re.search(
         r"\b(gdm|gestational diabetes|diabetes in pregnancy|pregnancy|metformin|glyburide|insulin|pharmacotherapy|oral agents?|15\.15|15\.17|15\.21|cross the placenta|not first-line|long-term safety)\b",
@@ -4152,7 +4320,9 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 5.2
     elif retinopathy_query and ("retinopathy" in haystack or "macular edema" in haystack):
         adjustment *= 1.25
-    elif retinopathy_query:
+    elif retinopathy_query and not (
+        ckd_evidence_grade_query and re.search(r"ada-kdigo-2026-ckd-cardiorenal|\bckd\b|\bkidney\b", haystack)
+    ):
         adjustment *= 0.25
     if retinopathy_query and staging_query and re.search(
         r"\b(microaneurysms|nonproliferative|proliferative|npdr|pdr|diabetic macular edema|dme|neovascularization|severity|staging)\b",
@@ -4164,6 +4334,19 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         haystack,
     ):
         adjustment *= 2.4
+    if neuropathy_query and ("dc26s012" in haystack or "retinopathy, neuropathy, and foot care" in haystack):
+        adjustment *= 4.8
+    elif neuropathy_query and ("neuropathy" in haystack or "neuropathic pain" in haystack):
+        adjustment *= 1.5
+    elif neuropathy_query and not (
+        ckd_evidence_grade_query and re.search(r"ada-kdigo-2026-ckd-cardiorenal|\bckd\b|\bkidney\b", haystack)
+    ):
+        adjustment *= 0.35
+    if neuropathy_query and treatment_query and re.search(
+        r"\b(gabapentinoid|gabapentin|pregabalin|serotonin-norepinephrine|snri|tricyclic|tca|sodium channel blocker|opioid|tramadol|tapentadol|12\.22)\b",
+        haystack,
+    ):
+        adjustment *= 3.2
     if glycemic_goal_query and ("glycemic goals" in haystack or "setting and modifying glycemic goals" in haystack):
         adjustment *= 2.8
     if glycemic_goal_query and ("dc26s006" in haystack or "glycemic goals, hypoglycemia" in haystack):
@@ -4263,3 +4446,30 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         adjustment *= 1.6
 
     return adjustment
+
+
+def chunk_excluded_for_query(query: str, chunk: KnowledgeChunk) -> bool:
+    lower = query.lower()
+    concepts = query_concepts(query, lower)
+    evidence_grade_query = "evidence_grade" in concepts
+    section12_evidence_grade_query = evidence_grade_query and (
+        "retinopathy" in concepts or "neuropathy" in concepts or "pad" in concepts
+    )
+    liver_evidence_grade_query = evidence_grade_query and has_liver_context(query)
+    kidney_query = has_kidney_context(query)
+    if not (section12_evidence_grade_query or liver_evidence_grade_query) or kidney_query:
+        return False
+    origin_haystack = f"{chunk.source} {chunk.source_label} {chunk.title} {chunk.section} {' '.join(chunk.metadata)}".lower()
+    if section12_evidence_grade_query and (
+        CKD_CARDIORENAL_CLAIMS_PATH in origin_haystack
+        or CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in origin_haystack
+        or CKD_CARDIORENAL_EVIDENCE_CARD_PATH in origin_haystack
+    ):
+        return True
+    if liver_evidence_grade_query and (
+        CKD_CARDIORENAL_CLAIMS_PATH in origin_haystack
+        or CKD_CARDIORENAL_CLAIM_REGISTRY_TITLE in origin_haystack
+        or CKD_CARDIORENAL_EVIDENCE_CARD_PATH in origin_haystack
+    ):
+        return True
+    return False

@@ -25,3 +25,11 @@ GitHub repo docs first, skill later.
 - [Hermes Clinical Search Brain](./hermes-clinical-search-brain.md)
 - [搜尋速度優化](./search-speed-optimization.md)
 - [GitHub / Zeabur 維運筆記](./github-zeabur-operations.md)
+- [Generic LLM Wiki Markdown Normalizer](./llm-wiki-markdown-normalizer-usage.md)
+
+## Wiki Ops Scope
+
+`scripts/wiki_ops.py` 是 ADA/KDIGO LINE QA wiki 的專案入口，包含 Section 12
+evidence-grade contract check。若拿它跑非 ADA/KDIGO wiki，請使用
+`--allow-missing-section12`，或改用通用工具
+`scripts/llm_wiki_markdown_normalizer.py`。

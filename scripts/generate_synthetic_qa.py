@@ -53,6 +53,8 @@ def slugify(value: str) -> str:
 
 def page_to_case(root: Path, path: Path) -> SyntheticCase | None:
     rel = path.relative_to(root).as_posix()
+    if rel in {"HERMES.md", "SCHEMA.md", "index.md", "log.md"}:
+        return None
     if rel.startswith(("raw/", "reports/", "inbox/", "docs/", "_meta/", "evals/")):
         return None
     text = path.read_text(encoding="utf-8", errors="ignore")
@@ -62,8 +64,19 @@ def page_to_case(root: Path, path: Path) -> SyntheticCase | None:
     aliases = list_field(fm, "aliases")
     entities = list_field(fm, "entities")
     tags = list_field(fm, "tags")
-    terms = [*aliases[:3], *entities[:3], *tags[:3], title]
-    expected = tuple(dict.fromkeys(term.lower() for term in terms if term and len(term) <= 60))[:6]
+    # Keep regression terms answer-realistic and discriminating. Tags are useful
+    # for routing, but broad tags such as "concept" or "diabetes" make smoke
+    # tests pass too easily, so expected terms come from aliases/entities/title.
+    terms = [*aliases[:3], *entities[:3], title]
+    expected = tuple(
+        dict.fromkeys(
+            term.lower()
+            for term in terms
+            if term and len(term) <= 60
+        )
+    )[:6]
+    if rel in {"claims/ada-2026-masld-mash-claims.md", "concepts/diabetes-masld-mash.md"}:
+        expected = tuple(dict.fromkeys([*expected, "fib-4", "resmetirom"]))[:8]
     if not expected:
         return None
     if page_type == "claim" and "ada-kdigo-2026-ckd-cardiorenal-claims" in rel:
@@ -105,6 +118,27 @@ def manual_anchor_cases() -> list[SyntheticCase]:
             ("osteoporosis", "bone health", "fracture", "frax", "t-score"),
             priority="high",
         ),
+        SyntheticCase(
+            "retinopathy-treatment-evidence-grade",
+            "嚴重眼病變治療 證據等級是？",
+            "evidence-cards/ada-2026-section-12-retinopathy-neuropathy-foot-pad-recommendation-grades.md",
+            ("section 12", "12.9", "12.12", "grade a", "anti-vegf", "retinopathy"),
+            priority="high",
+        ),
+        SyntheticCase(
+            "neuropathy-medication-evidence-grade",
+            "糖尿病神經病變藥物的證據等級是？",
+            "evidence-cards/ada-2026-section-12-retinopathy-neuropathy-foot-pad-recommendation-grades.md",
+            ("section 12", "12.22", "grade a", "gabapentinoid", "snri", "opioid"),
+            priority="high",
+        ),
+        SyntheticCase(
+            "masld-mash-evidence-grade-no-ckd-default",
+            "糖尿病 MASH 建議等級",
+            "claims/ada-2026-masld-mash-claims.md",
+            ("ada 2026 section 4", "4.27a", "fib-4", "glp-1", "mash"),
+            priority="high",
+        ),
     ]
 
 
@@ -134,11 +168,39 @@ def write_outputs(root: Path, cases: list[SyntheticCase]) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     lines = [
+        "---",
+        "title: Synthetic QA Candidates",
+        "summary: Generated routing-protection QA cases for the ADA-KDIGO Diabetes LLM Wiki.",
+        "type: report",
+        f"created: {today}",
+        f"updated: {today}",
+        "tags: [llm-wiki, synthetic-qa, regression]",
+        "sources:",
+        "  - evals/synthetic-qa-cases.jsonl",
+        "evidence_level: local-practice",
+        "clinical_use: workflow",
+        "confidence: high",
+        f"last_verified: {today}",
+        "status: active",
+        "obsidian_type: report",
+        "aliases:",
+        "  - synthetic qa candidates",
+        "entities:",
+        "  - Hermes Agent",
+        "related:",
+        "  - evals/synthetic-qa-registry",
+        "  - reports/markdown-normalization-audit",
+        "owner_agent: hermes",
+        "write_policy: hermes-maintained",
+        "---",
+        "",
         "# Synthetic QA Candidates",
         "",
         f"Generated: {today}",
         "",
         "These are maintenance questions generated from wiki pages. They protect routing, not clinical truth.",
+        "",
+        "Root operating files such as HERMES, SCHEMA, index, and log are excluded by design; synthetic QA protects clinical routing and prior LINE failure modes.",
         "",
         "## Cases",
         "",
@@ -156,6 +218,15 @@ def write_outputs(root: Path, cases: list[SyntheticCase]) -> tuple[Path, Path]:
                 "",
             ]
         )
+    lines.extend(
+        [
+            "## Related Pages",
+            "",
+            "- [[../evals/synthetic-qa-registry]]",
+            "- [[../reports/markdown-normalization-audit]]",
+            "",
+        ]
+    )
     md_path.write_text("\n".join(lines), encoding="utf-8")
     return md_path, jsonl_path
 
