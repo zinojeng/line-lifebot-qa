@@ -24,6 +24,7 @@ class FtsRegressionCase:
     expected_terms: tuple[str, ...]
     forbidden_terms: tuple[str, ...] = ()
     forbidden_scope: int = 10
+    expected_top_path_prefix: str = ""
 
 
 CASES = (
@@ -55,6 +56,30 @@ CASES = (
         query="ADA 2026 哪些建議等級較低？",
         expected_terms=("evidence-grade-router", "claim", "grade"),
     ),
+    FtsRegressionCase(
+        name="taiwan-implementation-zh-alias-no-ckd-default",
+        query="台灣 ADA 2026 臨床影響",
+        expected_terms=("ada-2025-vs-2026-taiwan-impact", "taiwan clinical impact"),
+        forbidden_terms=("ada-kdigo-2026-bp-ckd-targets", "ckd-cardiorenal"),
+        forbidden_scope=3,
+        expected_top_path_prefix="comparisons/ada-2025-vs-2026-taiwan-impact.md",
+    ),
+    FtsRegressionCase(
+        name="taiwan-practice-zh-alias-no-ckd-default",
+        query="ADA 2026 台灣實務影響",
+        expected_terms=("ada-2025-vs-2026-taiwan-impact", "taiwan clinical impact"),
+        forbidden_terms=("ada-kdigo-2026-bp-ckd-targets", "ckd-cardiorenal"),
+        forbidden_scope=3,
+        expected_top_path_prefix="comparisons/ada-2025-vs-2026-taiwan-impact.md",
+    ),
+    FtsRegressionCase(
+        name="ada-2026-short-alias-routes-alias-page",
+        query="ADA 2026 alias page",
+        expected_terms=("guidelines/ada2026", "routing use"),
+        forbidden_terms=("ada-kdigo-2026-bp-ckd-targets",),
+        forbidden_scope=3,
+        expected_top_path_prefix="guidelines/ada2026.md",
+    ),
 )
 
 
@@ -71,11 +96,12 @@ def run_case(case: FtsRegressionCase, db: Path, limit: int) -> tuple[bool, str]:
     matched = any(term.lower() in text for term in case.expected_terms)
     forbidden_text = hit_text(hits, case.forbidden_scope)
     forbidden = [term for term in case.forbidden_terms if term.lower() in forbidden_text]
-    ok = matched and not forbidden
     top = hits[0].path if hits else "-"
+    top_ok = not case.expected_top_path_prefix or top.startswith(case.expected_top_path_prefix)
+    ok = matched and not forbidden and top_ok
     return ok, (
         f"{'PASS' if ok else 'FAIL'}\t{case.name}\t"
-        f"top={top}\tmatched={matched}\tforbidden={','.join(forbidden) or '-'}"
+        f"top={top}\tmatched={matched}\ttop_ok={top_ok}\tforbidden={','.join(forbidden) or '-'}"
     )
 
 
@@ -110,6 +136,22 @@ def run_chunk_exclusion_tests() -> list[str]:
     )
     if not chunk_excluded_for_query(query, ckd_chunk):
         failures.append("FAIL\tmasld-query-excludes-ckd-cardiorenal-claim")
+    if not wiki_fts_search.should_merge_fallback("alias page for ADA 2026"):
+        failures.append("FAIL\tworkflow-alias-query-enables-fallback")
+    if wiki_fts_search.should_merge_fallback("recommended route of administration for insulin"):
+        failures.append("FAIL\tadministration-route-does-not-enable-workflow-fallback")
+    if wiki_fts_search.should_merge_fallback("preferred route to administer insulin in pregnancy"):
+        failures.append("FAIL\tclinical-route-to-does-not-enable-workflow-fallback")
+    if not wiki_fts_search.should_merge_fallback("routes to alias page for ADA 2026"):
+        failures.append("FAIL\tworkflow-routes-to-alias-enables-fallback")
+    if not wiki_fts_search.should_merge_fallback("ADA 2026 evidence grade B"):
+        failures.append("FAIL\tevidence-grade-still-enables-fallback")
+    if wiki_fts_search.should_apply_exact_phrase_boost("short"):
+        failures.append("FAIL\texact-phrase-short-query-not-boosted")
+    if not wiki_fts_search.should_apply_exact_phrase_boost("台灣 ada 2026 臨床影響"):
+        failures.append("FAIL\texact-phrase-cjk-alias-boosted")
+    if not wiki_fts_search.should_apply_exact_phrase_boost("ada 2026 alias page"):
+        failures.append("FAIL\texact-phrase-ascii-multitoken-boosted")
     section12_crossref_chunk = KnowledgeChunk(
         source="evidence-cards/ada-2026-section-12-retinopathy-neuropathy-foot-pad-recommendation-grades.md",
         source_label="ADA 2026 Section 12 Retinopathy Neuropathy Foot PAD Recommendation Grades",

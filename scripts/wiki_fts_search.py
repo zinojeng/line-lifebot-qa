@@ -221,10 +221,19 @@ def search(db: Path, query: str, limit: int) -> list[Hit]:
 
 
 def should_merge_fallback(query: str) -> bool:
-    return bool(re.search(r"[\u4e00-\u9fff]", query)) or any(
-        term in query.lower()
+    lower = query.lower()
+    workflow_query = bool(
+        re.search(
+            r"\b(?:alias page|alias routing|routing use|canonical alias|map of content|moc)\b",
+            lower,
+        )
+        or re.search(r"\broutes?\s+to\s+(?:alias|page|moc|map of content|canonical)\b", lower)
+    )
+    evidence_query = any(
+        term in lower
         for term in ("evidence grade", "recommendation grade", "strong recommendation", "lower certainty", "practice point")
     )
+    return bool(re.search(r"[\u4e00-\u9fff]", query)) or evidence_query or workflow_query
 
 
 def evidence_grade_query(query: str) -> bool:
@@ -338,14 +347,28 @@ def query_terms(query: str) -> list[str]:
     return [term for term in terms if term.strip()]
 
 
+def normalized_phrase(query: str) -> str:
+    return re.sub(r"\s+", " ", query.lower()).strip()
+
+
+def should_apply_exact_phrase_boost(exact_query: str) -> bool:
+    if len(exact_query) < 8:
+        return False
+    has_cjk = bool(re.search(r"[\u4e00-\u9fff]", exact_query))
+    ascii_tokens = re.findall(r"[a-z0-9][a-z0-9+\-.]*", exact_query)
+    return has_cjk or len(ascii_tokens) >= 2
+
+
 def fallback_like_search(conn: sqlite3.Connection, query: str, limit: int) -> list[sqlite3.Row]:
     terms = query_terms(query)
     if not terms:
         return []
+    exact_query = normalized_phrase(query)
     rows = conn.execute(
         "SELECT 0.0 AS rank, path, title, section, page_type, frontmatter, body AS excerpt FROM pages"
     ).fetchall()
     scored: list[tuple[float, sqlite3.Row]] = []
+    exact_boost_enabled = should_apply_exact_phrase_boost(exact_query)
     for row in rows:
         title = str(row["title"]).lower()
         section = str(row["section"]).lower()
@@ -353,6 +376,13 @@ def fallback_like_search(conn: sqlite3.Connection, query: str, limit: int) -> li
         frontmatter = str(row["frontmatter"]).lower()
         body = str(row["excerpt"]).lower()
         score = 0.0
+        if exact_boost_enabled:
+            if exact_query in frontmatter:
+                score += 110.0
+            if exact_query in title or exact_query in section:
+                score += 80.0
+            if exact_query in body:
+                score += 25.0
         for term in terms:
             if term in title:
                 score += 8.0
