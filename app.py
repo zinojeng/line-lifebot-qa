@@ -249,6 +249,14 @@ LINE_RETRIEVAL_FAILURE_DIR = os.getenv(
     "LINE_RETRIEVAL_FAILURE_DIR",
     "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/retrieval-failures",
 )
+LINE_RESEARCH_REQUEST_DIR = os.getenv(
+    "LINE_RESEARCH_REQUEST_DIR",
+    "/app/data/wiki/ada-kdigo-diabetes-wiki/inbox/research-requests",
+)
+LINE_RESEARCH_REQUEST_WRITEBACK_ENABLED = os.getenv(
+    "LINE_RESEARCH_REQUEST_WRITEBACK_ENABLED",
+    "1",
+).strip().lower() not in {"0", "false", "no", "off"}
 LINE_ANSWER_IMPROVEMENT_ENABLED = os.getenv("LINE_ANSWER_IMPROVEMENT_ENABLED", "1").strip().lower() not in {
     "0",
     "false",
@@ -1271,6 +1279,128 @@ def retrieval_failure_analysis(
     }
 
 
+def write_research_request(
+    user_text: str,
+    clinical_intent: dict[str, Any] | None,
+    analysis: dict[str, Any],
+    selected_hits: list[KnowledgeHit],
+) -> None:
+    if not LINE_RESEARCH_REQUEST_WRITEBACK_ENABLED:
+        return
+    if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|09\d{2}[- ]?\d{3}[- ]?\d{3}|[A-Z][12]\d{8}", user_text, flags=re.I):
+        return
+    try:
+        request_dir = Path(LINE_RESEARCH_REQUEST_DIR)
+        request_dir.mkdir(parents=True, exist_ok=True)
+        now = datetime.now(LINE_QUERY_CANDIDATE_TIMEZONE)
+        question = redacted_query_candidate_text(user_text)
+        digest = hashlib.sha1(f"research-request:{analysis.get('stage')}:{question}".encode("utf-8", errors="ignore")).hexdigest()[:10]
+        filename = f"{now.date().isoformat()}-line-gap-{query_candidate_slug(question)}-{digest}.md"
+        path = request_dir / filename
+        if path.exists():
+            return
+        intent = clinical_intent or {}
+        hit_lines = []
+        source_lines = []
+        for hit in selected_hits[:8]:
+            parts = [str(getattr(hit, "chunk_type", "") or "").strip(), str(getattr(hit, "source_label", "") or "").strip()]
+            section = str(getattr(hit, "section", "") or "").strip()
+            label = " / ".join(part for part in parts if part)
+            display_line = f"- {label} / {section}" if section else f"- {label or 'selected evidence'}"
+            hit_lines.append(display_line)
+            if len(source_lines) < 3:
+                source_lines.append(f"  - {json.dumps(display_line[2:], ensure_ascii=False)}")
+        source_lines = source_lines or ["sources: []"]
+        content = "\n".join(
+            [
+                "---",
+                f"title: LINE Research Request - {digest}",
+                f"created: {now.isoformat()}",
+                f"updated: {now.isoformat()}",
+                "type: research-request",
+                "tags: [research-request, line, guideline-qa, llm-wiki-gap]",
+                *(["sources:"] + source_lines if hit_lines else source_lines),
+                "evidence_level: local-practice",
+                "clinical_use: workflow",
+                "confidence: uncertain",
+                f"last_verified: {now.date().isoformat()}",
+                "status: open",
+                "obsidian_type: registry",
+                "owner_agent: line-lifebot-qa",
+                "write_policy: hermes-source-aware-review",
+                "---",
+                "",
+                "# LINE Research Request",
+                "",
+                "## User Question",
+                "",
+                question,
+                "",
+                "## Why This Needs Work",
+                "",
+                f"- stage: {analysis.get('stage', '')}",
+                f"- failure_types: {', '.join(str(x) for x in analysis.get('failure_types', []))}",
+                f"- missing_facets: {', '.join(str(x) for x in analysis.get('missing_facets', []))}",
+                f"- retrieval_mode: {analysis.get('retrieval_mode', '')}",
+                f"- fallback_reason: {analysis.get('fallback_reason', '')}",
+                "",
+                "## Query Planner Output",
+                "",
+                "```json",
+                json.dumps(
+                    {
+                        "clinical_intent": intent.get("clinical_intent"),
+                        "question_type": intent.get("question_type"),
+                        "concepts": json_list(intent.get("concepts")),
+                        "target_chapters": json_list(intent.get("target_chapters")),
+                        "evidence_targets": json_list(intent.get("evidence_targets")),
+                        "required_facets": json_list(intent.get("required_facets")),
+                        "avoid_routes": json_list(intent.get("avoid_routes")),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                "```",
+                "",
+                "## Suggested Outputs",
+                "",
+                "- [ ] missing aliases",
+                "- [ ] claim card",
+                "- [ ] evidence card",
+                "- [ ] regression test",
+                "- [ ] canonical query page or MOC route if source-supported",
+                "",
+                "## Candidate Evidence Seen",
+                "",
+                *(hit_lines or ["- No selected evidence recorded."]),
+                "",
+                "## Notes",
+                "",
+                str(analysis.get("gap_text") or "No explicit gap text recorded."),
+            ]
+        )
+        path.write_text(content + "\n", encoding="utf-8")
+        print(f"research request saved: {path}")
+    except Exception as exc:
+        print(f"research request writeback failed: {type(exc).__name__}: {exc}")
+
+
+def schedule_research_request(
+    user_text: str,
+    clinical_intent: dict[str, Any] | None,
+    analysis: dict[str, Any],
+    selected_hits: list[KnowledgeHit],
+) -> None:
+    analysis_snapshot = dict(analysis)
+    selected_hits_snapshot = list(selected_hits)
+    thread = threading.Thread(
+        target=write_research_request,
+        args=(user_text, clinical_intent, analysis_snapshot, selected_hits_snapshot),
+        daemon=True,
+    )
+    thread.start()
+
+
 def write_retrieval_failure(
     user_text: str,
     clinical_intent: dict[str, Any] | None,
@@ -1280,9 +1410,12 @@ def write_retrieval_failure(
     stage: str,
     gap_text: str = "",
 ) -> None:
-    if not LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED:
-        return
     if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|09\d{2}[- ]?\d{3}[- ]?\d{3}|[A-Z][12]\d{8}", user_text, flags=re.I):
+        return
+    analysis = retrieval_failure_analysis(user_text, clinical_intent, candidates, selected_hits, retrieval_trace, stage, gap_text)
+    if stage in {"no_candidates", "insufficient_selected_evidence", "evidence_review_unanswerable", "verification_unverified"}:
+        schedule_research_request(user_text, clinical_intent, analysis, selected_hits or candidates[:8])
+    if not LINE_RETRIEVAL_FAILURE_WRITEBACK_ENABLED:
         return
     try:
         failure_dir = Path(LINE_RETRIEVAL_FAILURE_DIR)
@@ -1294,12 +1427,12 @@ def write_retrieval_failure(
         path = failure_dir / filename
         if path.exists():
             return
-        analysis = retrieval_failure_analysis(user_text, clinical_intent, candidates, selected_hits, retrieval_trace, stage, gap_text)
         hit_lines = []
         for hit in (selected_hits or candidates)[:8]:
             hit_lines.append(
                 f"- {getattr(hit, 'chunk_type', '')}: {getattr(hit, 'source_label', '')} / {getattr(hit, 'section', '')}"
             )
+        source_lines = [f"  - {json.dumps(line[2:], ensure_ascii=False)}" for line in hit_lines[:3]]
         intent = clinical_intent or {}
         content = "\n".join(
             [
@@ -1309,8 +1442,7 @@ def write_retrieval_failure(
                 f"updated: {now.isoformat()}",
                 "type: retrieval-failure",
                 "tags: [retrieval-failure, line, guideline-qa, learning-loop]",
-                "sources:",
-                *[f"  - {line[2:]}" for line in hit_lines[:3]],
+                *(["sources:"] + source_lines if source_lines else ["sources: []"]),
                 "evidence_level: local-practice",
                 "clinical_use: workflow",
                 "confidence: uncertain",
@@ -1382,14 +1514,14 @@ def answer_improvement_allowed(user_text: str, answer: str) -> bool:
         return False
     if not user_text.strip() or not answer.strip():
         return False
-    if knowledge_no_answer_text()[:20] in answer:
-        return False
     if re.search(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}|09\d{2}[- ]?\d{3}[- ]?\d{3}|[A-Z][12]\d{8}", user_text, flags=re.I):
         return False
     return bool(
         re.search(
             r"ada|kdigo|ckd|egfr|uacr|dialysis|sglt2|glp|cgm|aid|a1c|骨|骨鬆|骨質疏鬆|"
-            r"糖尿病|腎|洗腎|透析|尿蛋白|白蛋白尿|排糖藥|連續血糖|指引|治療|診斷",
+            r"diabetes|type 1|type 2|screening|hypertension|blood pressure|lipid|obesity|pregnancy|gestational|gdm|"
+            r"retinopathy|neuropathy|foot|pad|masld|mash|糖尿病|第一型|第二型|篩檢|普篩|高血壓|血壓|血脂|肥胖|"
+            r"懷孕|妊娠|妊娠糖尿病|視網膜|神經病變|足部|周邊動脈|脂肪肝|腎|洗腎|透析|尿蛋白|白蛋白尿|排糖藥|連續血糖|指引|治療|診斷",
             f"{user_text} {answer}".lower(),
         )
     )
@@ -1431,8 +1563,9 @@ def answer_improvement_system_prompt() -> str:
         "Not allowed without human/source review: changing clinical thresholds, recommendation grades, drug indications, "
         "contraindications, or promoting draft clinical claims into canonical wiki pages. "
         "Return strict JSON with keys: quality_score, answer_complete, public_wording_issues, missing_evidence_facets, "
-        "retrieval_route_issues, safe_auto_actions, requires_human_or_clinical_review, proposed_query_page_title, "
-        "proposed_smoke_test, summary."
+        "retrieval_route_issues, missing_aliases, missing_claim_cards, missing_evidence_cards, proposed_regression_tests, "
+        "research_requests, safe_auto_actions, requires_human_or_clinical_review, proposed_query_page_title, proposed_smoke_test, "
+        "summary. Use empty arrays when no item is needed."
     )
 
 
@@ -1474,6 +1607,39 @@ def build_answer_improvement_review(
     return call_answer_improvement_model(answer_improvement_system_prompt(), user_payload)
 
 
+def normalize_answer_improvement_review(review_json: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not review_json:
+        return None
+    array_keys = (
+        "public_wording_issues",
+        "missing_evidence_facets",
+        "retrieval_route_issues",
+        "missing_aliases",
+        "missing_claim_cards",
+        "missing_evidence_cards",
+        "proposed_regression_tests",
+        "research_requests",
+        "safe_auto_actions",
+        "proposed_smoke_test",
+    )
+    normalized = dict(review_json)
+    for key in array_keys:
+        normalized[key] = json_list(normalized.get(key))
+    normalized.setdefault("quality_score", "")
+    normalized.setdefault("answer_complete", False)
+    normalized.setdefault("requires_human_or_clinical_review", True)
+    normalized.setdefault("proposed_query_page_title", "")
+    normalized.setdefault("summary", "")
+    return normalized
+
+
+def review_target_lines(review_json: dict[str, Any] | None, key: str) -> list[str]:
+    if not review_json:
+        return ["- (none)"]
+    values = json_list(review_json.get(key))
+    return [f"- {item}" for item in values] or ["- (none)"]
+
+
 def write_answer_improvement(
     user_text: str,
     answer: str,
@@ -1487,7 +1653,7 @@ def write_answer_improvement(
         review_text = build_answer_improvement_review(user_text, answer, clinical_intent, selected_hits, retrieval_trace)
         if not review_text:
             return
-        review_json = extract_json_object(review_text)
+        review_json = normalize_answer_improvement_review(extract_json_object(review_text))
         improvement_dir = Path(LINE_ANSWER_IMPROVEMENT_DIR)
         improvement_dir.mkdir(parents=True, exist_ok=True)
         now = datetime.now(LINE_QUERY_CANDIDATE_TIMEZONE)
@@ -1501,6 +1667,11 @@ def write_answer_improvement(
         evidence_lines = answer_improvement_hit_lines(selected_hits)
         quality_score = review_json.get("quality_score", "") if review_json else ""
         requires_review = review_json.get("requires_human_or_clinical_review", True) if review_json else True
+        source_lines = []
+        for hit in selected_hits[:3]:
+            source_label = getattr(hit, "source_label", "")
+            section = getattr(hit, "section", "")
+            source_lines.append(f"  - {json.dumps(f'{source_label} / {section}', ensure_ascii=False)}")
         content = "\n".join(
             [
                 "---",
@@ -1509,11 +1680,7 @@ def write_answer_improvement(
                 f"updated: {now.isoformat()}",
                 "type: answer-improvement",
                 f"tags: [answer-improvement, line, guideline-qa, self-improvement, {LINE_ANSWER_IMPROVEMENT_PROVIDER}-reviewer]",
-                "sources:",
-                *[
-                    f"  - {getattr(hit, 'source_label', '')} / {getattr(hit, 'section', '')}"
-                    for hit in selected_hits[:3]
-                ],
+                *(["sources:"] + source_lines if source_lines else ["sources: []"]),
                 "evidence_level: local-practice",
                 "clinical_use: workflow",
                 "confidence: uncertain",
@@ -1559,6 +1726,23 @@ def write_answer_improvement(
                 f"- provider: {LINE_ANSWER_IMPROVEMENT_PROVIDER}",
                 f"- model: {LINE_ANSWER_IMPROVEMENT_MODEL}",
                 "",
+                "## Structured Improvement Targets",
+                "",
+                "### Missing Aliases",
+                *review_target_lines(review_json, "missing_aliases"),
+                "",
+                "### Missing Claim Cards",
+                *review_target_lines(review_json, "missing_claim_cards"),
+                "",
+                "### Missing Evidence Cards",
+                *review_target_lines(review_json, "missing_evidence_cards"),
+                "",
+                "### Proposed Regression Tests",
+                *review_target_lines(review_json, "proposed_regression_tests"),
+                "",
+                "### Research Requests",
+                *review_target_lines(review_json, "research_requests"),
+                "",
                 "```json",
                 json.dumps(review_json, ensure_ascii=False, indent=2) if review_json else review_text,
                 "```",
@@ -1593,6 +1777,122 @@ def schedule_answer_improvement(
         daemon=True,
     )
     thread.start()
+
+
+def retrieval_ladder_summary(retrieval_trace: dict[str, Any], candidates: list[KnowledgeHit], stage: str = "") -> str:
+    mode = str(retrieval_trace.get("retrieval_mode") or "")
+    fallback_reason = str(retrieval_trace.get("fallback_reason") or "")
+    if mode == "fast_path":
+        return "已找到部分已整理知識與指南證據；以下只整理目前證據可支持的內容。"
+    if candidates:
+        reason = f"（原因：{fallback_reason}）" if fallback_reason else ""
+        return f"知識庫專頁尚未完整整理，已改用已載入指南內容與結構化證據{reason}。"
+    return "目前在已載入知識庫與指南內容中都沒有找到足夠直接的依據。"
+
+
+def safe_learning_loop_message(stage: str, has_candidates: bool) -> str:
+    if has_candidates:
+        return (
+            "這題我也會記錄為知識庫補強項，後續可補 aliases、claim card、evidence card、"
+            "regression test 或 research request，讓下次更容易命中。"
+        )
+    return (
+        "這題目前需要補強知識庫；我已建立改進紀錄，後續可補 missing aliases、"
+        "claim card、evidence card、regression test 或 research request。"
+    )
+
+
+def red_flag_safety_text() -> str:
+    return "若你有低血糖症狀、血糖持續很高、胸痛、意識不清、呼吸急促、嚴重脫水或明顯不舒服，請先聯絡醫療團隊或就醫。"
+
+
+def static_evidence_gap_response(stage: str, has_candidates: bool, gap_text: str = "") -> str:
+    if has_candidates:
+        prefix = "已檢索到部分已載入指南內容，但本輪證據審查認為不足以安全整理成完整答案。"
+    else:
+        prefix = "這題目前在已載入知識庫與指南內容中都沒有找到足夠直接的依據。"
+    gap_excerpt = "" if stage in {"evidence_review_unanswerable", "verification_unverified"} else public_gap_excerpt(gap_text)
+    gap = f" 目前缺口：{gap_excerpt}" if gap_excerpt else ""
+    return f"{prefix}{gap} {safe_learning_loop_message(stage, has_candidates)} {red_flag_safety_text()}"[:4900]
+
+
+def public_gap_excerpt(gap_text: str) -> str:
+    text = re.sub(r"\b(ANSWERABLE|VERIFIED)\s*:\s*(yes|no)\b", "", gap_text or "", flags=re.I)
+    text = re.sub(r"\b(EVIDENCE|GAPS?|REASONS?|FINDINGS?)\s*:\s*", "", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text).strip(" -:;。\n\t")
+    if re.search(
+        r"片段|chunk|rerank|fast[_ -]?path|llm wiki|raw guideline|json|retrieval|candidate|facet|alias|topic-?map|moc|\{|\}",
+        text,
+        flags=re.I,
+    ):
+        return ""
+    return text[:260]
+
+
+def build_limited_guideline_fallback_answer(
+    api_key: str,
+    user_text: str,
+    clinical_intent: dict[str, Any] | None,
+    candidates: list[KnowledgeHit],
+    selected_hits: list[KnowledgeHit],
+    retrieval_trace: dict[str, Any],
+    stage: str,
+    gap_text: str = "",
+    evidence_review: str = "",
+    long_context_verification: str = "",
+) -> str:
+    evidence_hits = selected_hits
+    if not evidence_hits:
+        return static_evidence_gap_response(stage, False, gap_text)
+
+    ladder = retrieval_ladder_summary(retrieval_trace, candidates, stage)
+    learning_note = safe_learning_loop_message(stage, True)
+    system_text = (
+        SYSTEM_PROMPT
+        + clinical_intent_prompt(clinical_intent)
+        + knowledge_prompt_from_hits(evidence_hits)
+        + evidence_review_prompt(evidence_review)
+        + long_context_verification_prompt(long_context_verification)
+        + (
+            "\n\n檢索階梯狀態：\n"
+            f"{ladder}\n"
+            "只有本輪已選取且通過覆蓋檢查的 guideline evidence 可以用來回答。"
+            "不能使用模型內建知識或外部網路內容補完缺口。"
+        )
+        + (
+            "\n\nCoverage gap:\n"
+            f"{gap_text}\n"
+            "若有缺口，請在回答末段說明目前已載入內容不足以回答的部分。"
+            if gap_text
+            else ""
+        )
+    )
+    try:
+        answer = call_llm(
+            api_key,
+            system_text,
+            (
+                f"病友問題：{user_text}\n\n"
+                "請用繁體中文回答。先直接回答已載入指南可支持的部分；"
+                "如果只是知識庫專頁未完整整理但已選取指南證據有內容，請說「知識庫專頁尚未完整整理，但已載入指南內容顯示……」。"
+                "不要使用「片段」這個詞，不要說目前快速問答暫時無法回覆。"
+            ),
+            max_output_tokens=760,
+            temperature=0.25,
+            timeout=GEMINI_TIMEOUT,
+        )
+        if answer.strip():
+            return (remove_trailing_question(answer).strip() + "\n\n" + learning_note)[:4900]
+    except Exception as exc:
+        print(f"{LLM_PROVIDER} limited fallback answer failed: {type(exc).__name__}: {exc}")
+
+    return (
+        f"{ladder} 但目前證據覆蓋仍不足以安全整理成完整答案。"
+        + " "
+        + learning_note
+        + " "
+        + red_flag_safety_text()
+    )
 
 
 def extract_gemini_text(payload: dict[str, Any]) -> str:
@@ -3144,6 +3444,8 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
 
     recent_context = conversation_prompt(line_user_id)
     clinical_intent = build_clinical_intent(api_key, user_text, recent_context)
+    candidates: list[KnowledgeHit] = []
+    selected_hits: list[KnowledgeHit] = []
     scope_text = (
         f"{user_text}\n{recent_context}"
         if contextual_guideline_followup(user_text, recent_context)
@@ -3164,7 +3466,13 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             "no_candidates",
             "No candidates returned after wiki fast path and fallback retrieval.",
         )
-        return knowledge_no_answer_text()
+        final_answer = static_evidence_gap_response(
+            "no_candidates",
+            False,
+            "No candidates returned after wiki fast path and fallback retrieval.",
+        )
+        schedule_answer_improvement(user_text, final_answer, clinical_intent, [], retrieval_trace)
+        return final_answer
 
     selected_hits, rerank_answerable, coverage_gaps = select_guideline_hits(api_key, user_text, candidates, clinical_intent)
     selected_hits, recursive_note = append_recursive_coverage_hits(user_text, selected_hits, clinical_intent)
@@ -3201,7 +3509,9 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             "insufficient_selected_evidence",
             coverage_gaps,
         )
-        return knowledge_no_answer_text()
+        final_answer = static_evidence_gap_response("insufficient_selected_evidence", bool(selected_hits or candidates), coverage_gaps)
+        schedule_answer_improvement(user_text, final_answer, clinical_intent, selected_hits or candidates[:5], retrieval_trace)
+        return final_answer
 
     knowledge_text = knowledge_prompt_from_hits(selected_hits)
     evidence_review, long_context_verification = build_parallel_evidence_checks(
@@ -3226,7 +3536,9 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
                 "evidence_review_unanswerable",
                 evidence_review,
             )
-            return knowledge_no_answer_text()
+            final_answer = static_evidence_gap_response("evidence_review_unanswerable", bool(selected_hits or candidates), evidence_review)
+            schedule_answer_improvement(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
+            return final_answer
         evidence_review = (
             evidence_review
             + "\n\n本地 coverage override：此題屬於已載入指南涵蓋的慢性病照護範圍；"
@@ -3247,7 +3559,9 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
                 "verification_unverified",
                 long_context_verification,
             )
-            return knowledge_no_answer_text()
+            final_answer = static_evidence_gap_response("verification_unverified", bool(selected_hits or candidates), long_context_verification)
+            schedule_answer_improvement(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
+            return final_answer
     system_text = (
         SYSTEM_PROMPT
         + memory_prompt(line_user_id)
@@ -3272,13 +3586,32 @@ def llm_answer(user_text: str, line_user_id: str = "") -> str:
             write_query_candidate(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
             schedule_answer_improvement(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
             return final_answer
-        return "目前系統暫時沒有產生完整回覆。若你有明顯不舒服或血糖異常，請先聯絡醫療團隊。"
+        final_answer = build_limited_guideline_fallback_answer(
+            api_key,
+            user_text,
+            clinical_intent,
+            candidates,
+            selected_hits,
+            retrieval_trace,
+            "answer_generation_empty",
+            "Answer generator returned an empty response.",
+            evidence_review,
+            long_context_verification,
+        )
+        schedule_answer_improvement(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
+        return final_answer
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")[:200]
         print(f"{LLM_PROVIDER} HTTP {exc.code}: {detail}")
     except Exception as exc:
         print(f"{LLM_PROVIDER} request failed: {type(exc).__name__}: {exc}")
-    return "目前快速問答暫時無法回覆。若你有低血糖症狀、血糖持續很高、胸痛、意識不清或明顯不舒服，請先聯絡醫療團隊或就醫。"
+    final_answer = static_evidence_gap_response(
+        "answer_generation_error",
+        bool(selected_hits or candidates),
+        "Final answer generation failed after retrieval.",
+    )
+    schedule_answer_improvement(user_text, final_answer, clinical_intent, selected_hits, retrieval_trace)
+    return final_answer
 
 
 async def handle_text_event(event: dict[str, Any]) -> None:

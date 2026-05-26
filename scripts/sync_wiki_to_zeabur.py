@@ -135,7 +135,7 @@ def sync_wiki(
         zeabur_exec(service_id, env_id, f"printf %s {shlex.quote(chunk)} >> {shlex.quote(remote_tmp_b64)}")
         print(f"uploaded_chunk={(index // chunk_chars) + 1}")
 
-    preserve_dirs = "inbox/query-candidates inbox/retrieval-failures inbox/answer-improvements"
+    preserve_dirs = "inbox/query-candidates inbox/retrieval-failures inbox/answer-improvements inbox/research-requests"
     remote_cmd = " && ".join(
         [
             "PRESERVE_DIR=/tmp/ada-kdigo-wiki-preserve-$$",

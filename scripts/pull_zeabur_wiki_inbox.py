@@ -17,7 +17,12 @@ DEFAULT_SERVICE_ID = "6a0c6dcf40a883532f331aa2"
 DEFAULT_ENV_ID = "6a0c6dcef3b70f2a79fbd6f2"
 DEFAULT_REMOTE_WIKI = "/app/data/wiki/ada-kdigo-diabetes-wiki"
 DEFAULT_LOCAL_WIKI = Path("/Users/ander/Documents/hermes-agent/wiki/ada-kdigo-diabetes-wiki")
-INBOX_DIRS = ("inbox/query-candidates", "inbox/retrieval-failures", "inbox/answer-improvements")
+INBOX_DIRS = (
+    "inbox/query-candidates",
+    "inbox/retrieval-failures",
+    "inbox/answer-improvements",
+    "inbox/research-requests",
+)
 
 
 def run(cmd: list[str], *, check: bool = True, timeout: int | None = None) -> subprocess.CompletedProcess[str]:

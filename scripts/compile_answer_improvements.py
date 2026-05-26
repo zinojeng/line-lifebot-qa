@@ -104,6 +104,11 @@ def main() -> int:
     public_wording = Counter()
     missing_facets = Counter()
     retrieval_issues = Counter()
+    missing_aliases = Counter()
+    missing_claim_cards = Counter()
+    missing_evidence_cards = Counter()
+    proposed_regression_tests = Counter()
+    research_requests = Counter()
     reviewer_diagnostics = Counter()
     safe_actions = Counter()
     human_review = []
@@ -147,6 +152,27 @@ def main() -> int:
             if not in_scope_value(value):
                 continue
             retrieval_issues[value] += 1
+        for value in list_values(review.get("missing_aliases")):
+            if not in_scope_value(value):
+                continue
+            missing_aliases[value] += 1
+        for value in list_values(review.get("missing_claim_cards")):
+            if not in_scope_value(value):
+                continue
+            missing_claim_cards[value] += 1
+        for value in list_values(review.get("missing_evidence_cards")):
+            if not in_scope_value(value):
+                continue
+            missing_evidence_cards[value] += 1
+        proposed_tests = sorted({*list_values(review.get("proposed_regression_tests")), *list_values(review.get("proposed_smoke_test"))})
+        for value in proposed_tests:
+            if not in_scope_value(value):
+                continue
+            proposed_regression_tests[value] += 1
+        for value in list_values(review.get("research_requests")):
+            if not in_scope_value(value):
+                continue
+            research_requests[value] += 1
         for value in list_values(review.get("safe_auto_actions")):
             if not in_scope_value(value):
                 continue
@@ -218,6 +244,11 @@ def main() -> int:
         ("Repeated Public Wording Issues", public_wording),
         ("Repeated Missing Evidence Facets", missing_facets),
         ("Repeated Retrieval Route Issues", retrieval_issues),
+        ("Repeated Missing Aliases", missing_aliases),
+        ("Repeated Missing Claim Cards", missing_claim_cards),
+        ("Repeated Missing Evidence Cards", missing_evidence_cards),
+        ("Repeated Proposed Regression Tests", proposed_regression_tests),
+        ("Repeated Research Requests", research_requests),
         ("Reviewer Diagnostics", reviewer_diagnostics),
         ("Repeated Safe Auto Actions", safe_actions),
     ]
