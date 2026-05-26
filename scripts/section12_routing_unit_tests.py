@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app import fallback_clinical_intent, section12_evidence_grade_context
+from app import clinical_intent_text, clinical_retrieval_intent_prompt, fallback_clinical_intent, sanitize_retrieval_plan_text, section12_evidence_grade_context
 from knowledge import KnowledgeChunk, domain_adjustment, query_concepts
 from section12_routing import section12_context_query
 
@@ -21,6 +21,13 @@ def assert_equal(actual: object, expected: object, label: str) -> None:
 def assert_in(member: object, values: object, label: str) -> None:
     if member not in values:
         raise AssertionError(f"{label}: expected {member!r} in {values!r}")
+
+
+def assert_contains_all(text: str, terms: tuple[str, ...], label: str) -> None:
+    lowered = text.lower()
+    missing = [term for term in terms if term.lower() not in lowered]
+    if missing:
+        raise AssertionError(f"{label}: missing {missing!r} in {text!r}")
 
 
 def main() -> int:
@@ -109,6 +116,65 @@ def main() -> int:
     )
     gdm_intent = fallback_clinical_intent("妊娠糖尿病 metformin 證據等級", "")
     assert_equal(gdm_intent.get("question_type"), "pregnancy_pharmacotherapy_evidence_grade", "GDM grade should stay pregnancy pharmacotherapy")
+    assert_contains_all(
+        " ".join(gdm_intent.get("search_queries", [])),
+        ("dc26s015", "15.17", "15.21", "metformin", "glyburide", "cross placenta"),
+        "GDM planner should preserve clinical-search-brain search terms",
+    )
+    assert_in(
+        "web search or AI general knowledge as patient-facing clinical answer",
+        gdm_intent.get("do_not_answer_with", []),
+        "GDM planner should block direct web/general-knowledge answer",
+    )
+    assert_equal("source_gap_policy" in gdm_intent, True, "planner should include source gap policy")
+
+    type1_intent = fallback_clinical_intent("第一型糖尿病的病患，是否適合用普篩的方式來找出來呢？", "")
+    assert_contains_all(
+        " ".join(type1_intent.get("search_queries", [])),
+        ("dc26s002", "type 1 diabetes screening", "islet autoantibodies", "GAD", "IA-2", "ZnT8", "2.7"),
+        "type 1 screening planner should preserve bilingual/abbreviation search terms",
+    )
+    type1_search_text = clinical_intent_text(type1_intent).lower()
+    assert_equal("islet autoantibodies" in type1_search_text and "dc26s002" in type1_search_text, True, "clinical intent text should feed planner terms into retrieval")
+    assert_equal("research request" in type1_search_text, False, "source gap policy should not pollute retrieval text")
+    assert_equal(
+        sanitize_retrieval_plan_text("type 1 diabetes screening research request AI general knowledge web search"),
+        "type 1 diabetes screening",
+        "retrieval planner should strip policy/noise terms",
+    )
+    noisy_intent_text = clinical_intent_text(
+        {
+            "clinical_intent": "test",
+            "concepts": ["screening research requests"],
+            "aliases": ["type 1 diabetes web search"],
+            "must_retrieve": ["GAD IA-2 一般醫學常識"],
+            "evidence_targets": ["2.7 未載入指南"],
+            "search_queries": ["islet autoantibodies research request model general knowledge"],
+        }
+    ).lower()
+    assert_equal(
+        any(term in noisy_intent_text for term in ("web search", "research request", "research requests", "model general knowledge", "一般醫學常識", "未載入指南")),
+        False,
+        "clinical intent text should sanitize all retrieval-facing fields",
+    )
+    noisy_prompt = clinical_retrieval_intent_prompt(
+        {
+            "clinical_intent": "test",
+            "concepts": ["screening research requests"],
+            "aliases": ["type 1 diabetes web search"],
+            "must_retrieve": ["GAD IA-2 一般醫學常識"],
+            "evidence_targets": ["2.7 未載入指南"],
+            "search_queries": ["islet autoantibodies research request model general knowledge"],
+        }
+    ).lower()
+    assert_equal(
+        any(term in noisy_prompt for term in ("web search", "research request", "research requests", "model general knowledge", "一般醫學常識", "未載入指南")),
+        False,
+        "clinical retrieval intent prompt should sanitize all retrieval-facing fields",
+    )
+    assert_equal('"clinical_intent": ""' in clinical_retrieval_intent_prompt({"clinical_intent": "research request"}), False, "empty sanitized scalar keys should be dropped")
+    generic_intent = fallback_clinical_intent("糖尿病飲食與運動建議", "")
+    assert_equal("source_gap_policy" in generic_intent, True, "generic fallback intent should include source gap policy")
     return 0
 
 

@@ -2113,18 +2113,24 @@ def json_list(value: Any) -> list[str]:
     return []
 
 
+def sanitized_json_list(value: Any) -> list[str]:
+    return [item for item in (sanitize_retrieval_plan_text(raw) for raw in json_list(value)) if item]
+
+
 def clinical_intent_text(clinical_intent: dict[str, Any] | None) -> str:
     if not clinical_intent:
         return ""
     parts = [
-        str(clinical_intent.get("clinical_intent") or "").strip(),
-        str(clinical_intent.get("question_type") or "").strip(),
-        *json_list(clinical_intent.get("patient_context")),
-        *json_list(clinical_intent.get("must_retrieve")),
-        *json_list(clinical_intent.get("required_facets")),
-        *json_list(clinical_intent.get("concepts")),
-        *json_list(clinical_intent.get("target_chapters")),
-        *json_list(clinical_intent.get("evidence_targets")),
+        sanitize_retrieval_plan_text(str(clinical_intent.get("clinical_intent") or "").strip()),
+        sanitize_retrieval_plan_text(str(clinical_intent.get("question_type") or "").strip()),
+        *sanitized_json_list(clinical_intent.get("patient_context")),
+        *sanitized_json_list(clinical_intent.get("must_retrieve")),
+        *sanitized_json_list(clinical_intent.get("required_facets")),
+        *sanitized_json_list(clinical_intent.get("concepts")),
+        *sanitized_json_list(clinical_intent.get("aliases")),
+        *sanitized_json_list(clinical_intent.get("target_chapters")),
+        *sanitized_json_list(clinical_intent.get("evidence_targets")),
+        *sanitized_json_list(clinical_intent.get("search_queries")),
     ]
     return " ".join(part for part in parts if part).strip()
 
@@ -2147,13 +2153,27 @@ def clinical_retrieval_intent_prompt(clinical_intent: dict[str, Any] | None) -> 
         "clinical_intent",
         "question_type",
         "patient_context",
+        "aliases",
         "must_retrieve",
         "required_facets",
         "concepts",
         "target_chapters",
         "evidence_targets",
+        "search_queries",
     )
-    retrieval_intent = {key: clinical_intent.get(key) for key in allowed_keys if clinical_intent.get(key)}
+    retrieval_intent = {}
+    for key in allowed_keys:
+        value = clinical_intent.get(key)
+        if not value:
+            continue
+        if isinstance(value, list):
+            retrieval_intent[key] = sanitized_json_list(value)
+        elif isinstance(value, str):
+            cleaned = sanitize_retrieval_plan_text(value)
+            if cleaned:
+                retrieval_intent[key] = cleaned
+        else:
+            retrieval_intent[key] = value
     return (
         "\n\n臨床檢索目標：\n"
         "以下 JSON 只保留正向檢索欄位；負面路由與回答策略欄位不應進入 search_query。\n"
@@ -2557,15 +2577,17 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
 
 def merge_clinical_brain(intent: dict[str, Any], brain_plan: dict[str, list[str]]) -> dict[str, Any]:
     if not brain_plan:
-        return intent
+        return enforce_source_gap_policy(intent)
     merged = dict(intent)
     for target_key, brain_key in (
         ("concepts", "concepts"),
+        ("aliases", "aliases"),
         ("target_chapters", "target_chapters"),
         ("evidence_targets", "evidence_targets"),
         ("avoid_routes", "avoid_routes"),
         ("required_facets", "required_facets"),
         ("must_retrieve", "evidence_targets"),
+        ("search_queries", "search_queries"),
     ):
         values = [*json_list(merged.get(target_key)), *json_list(brain_plan.get(brain_key))]
         merged[target_key] = dedupe_preserve(values)
@@ -2574,6 +2596,23 @@ def merge_clinical_brain(intent: dict[str, Any], brain_plan: dict[str, list[str]
         merged["do_not_answer_with"] = dedupe_preserve(
             [*json_list(merged.get("do_not_answer_with")), *brain_plan["avoid_routes"]]
         )
+    return enforce_source_gap_policy(merged)
+
+
+def enforce_source_gap_policy(intent: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(intent)
+    merged["source_gap_policy"] = (
+        "If LLM Wiki and loaded raw/structured guideline evidence are insufficient, create a research request; "
+        "do not answer the patient-facing LINE message from model general knowledge, web search, or unsupported inference."
+    )
+    merged["do_not_answer_with"] = dedupe_preserve(
+        [
+            *json_list(merged.get("do_not_answer_with")),
+            "model general medical knowledge",
+            "web search or AI general knowledge as patient-facing clinical answer",
+            "unsupported inference when wiki/raw guideline evidence is insufficient",
+        ]
+    )
     return merged
 
 
@@ -2589,8 +2628,20 @@ def dedupe_preserve(values: list[str]) -> list[str]:
     return result
 
 
+def sanitize_retrieval_plan_text(text: str) -> str:
+    cleaned = re.sub(
+        r"\b(?:research[- ]?requests?|general medical knowledge|model general knowledge|ai general knowledge|general ai knowledge|model knowledge|web search(?:es)?|unsupported inferences?|patient[- ]?facing answer)\b|"
+        r"一般醫學常識|模型內建知識|網路搜尋|外部網路|未載入來源|未載入指南|病友回答|研究請求|改進紀錄",
+        " ",
+        text or "",
+        flags=re.I,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> dict[str, Any]:
-    fallback = fallback_clinical_intent(user_text, recent_context)
+    fallback = enforce_source_gap_policy(fallback_clinical_intent(user_text, recent_context))
     if not LINE_QUERY_PLANNING_ENABLED or not api_key:
         return fallback
 
@@ -2598,8 +2649,10 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "你是糖尿病指南問答的 clinical intent parser，不是回答者。"
         "你的任務是先理解使用者真正要問的臨床問題，定義需要檢索哪些指南證據。"
         "不要提供醫療建議，不要回答問題，不要使用模型內建醫學知識下結論。"
+        "你可以產生搜尋計畫，但最後答案仍只能由已載入 LLM Wiki、raw markdown 或結構化 guideline evidence 支持。"
+        "若 wiki/raw evidence 不足，web 或 AI general knowledge 只能變成 research request 線索，不可直接進入 LINE 病友回答。"
         "請輸出 JSON，欄位固定為："
-        "clinical_intent, question_type, patient_context, concepts, target_chapters, evidence_targets, must_retrieve, required_facets, avoid_routes, answer_strategy, do_not_answer_with。"
+        "clinical_intent, question_type, patient_context, concepts, aliases, target_chapters, evidence_targets, must_retrieve, search_queries, required_facets, avoid_routes, answer_strategy, do_not_answer_with。"
         "required_facets 只能使用這些值：blood_pressure_target, kidney_context, medication, threshold, glycemic_target, a1c_reliability, monitoring, technology_indication, diagnosis, retinopathy_context, staging, pad_context, ascvd_context, pregnancy, hypoglycemia, treatment, foot_care, frequency, liver_context, hospital_context, steroid_context, bone_health, fracture_risk。"
         "若使用者問血糖控制目標、A1C 目標、CGM/TIR 目標，請理解為 glycemic targets；target_chapters 應包含 ADA S6，required_facets 應包含 glycemic_target。"
         "若使用者問血壓控制目標、高血壓目標、BP target，請理解為 blood pressure target / hypertension treatment goal，不要歸類為 glycemic target；target_chapters 應包含 ADA S10；evidence_targets 應包含 Recommendation 10.3、Recommendation 10.4、<130/80 mmHg、high cardiovascular or kidney risk 時可鼓勵 systolic <120 mmHg、individualized/shared decision-making/adverse effects；required_facets 應包含 blood_pressure_target, ascvd_context, treatment。"
@@ -2627,7 +2680,7 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
             api_key,
             system_text,
             prompt,
-            max_output_tokens=520,
+            max_output_tokens=720,
             temperature=0.05,
             timeout=min(GEMINI_TIMEOUT, 10),
         )
@@ -2642,9 +2695,11 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
     for key in (
         "patient_context",
         "concepts",
+        "aliases",
         "target_chapters",
         "evidence_targets",
         "must_retrieve",
+        "search_queries",
         "required_facets",
         "avoid_routes",
         "do_not_answer_with",
@@ -2671,8 +2726,9 @@ def build_retrieval_query(
         "你不是回答者，也不要提供醫療建議。"
         "你的唯一任務是把 LINE 病友問題轉成已載入臨床指南文件檢索查詢。"
         "請根據本次問題與最近對話脈絡，補上可能出現在這些指南文件中的英文術語、縮寫、同義詞與章節詞。"
-        "你會收到 clinical intent JSON；請優先根據 concepts、target_chapters、evidence_targets、must_retrieve、required_facets 產生多面向檢索詞。"
+        "你會收到 clinical intent JSON；請優先根據 concepts、aliases、target_chapters、evidence_targets、must_retrieve、search_queries、required_facets 產生多面向檢索詞。"
         "avoid_routes 與 do_not_answer_with 是負面路由規則，只能用來排除方向，不可把其中的否定詞、禁搜詞或不該走的章節詞加入 search_query。"
+        "不可把 web search、general medical knowledge 或未載入來源當成答案來源；若檢索不足，系統只會建立 research request。"
         "若問題是血糖控制目標、A1C 目標、CGM/TIR 目標，請加入 ADA section 6、glycemic goals、A1C goal、individualized targets、CGM metrics、time in range。"
         "若問題是血壓控制目標、高血壓目標、BP target，請加入 ADA section 10、dc26s010、Treatment Goals、blood pressure goals、hypertension、Recommendation 10.3、Recommendation 10.4、on-treatment blood pressure goal、<130/80 mmHg、systolic blood pressure goal <120 mmHg、high cardiovascular or kidney risk、individualized/shared decision-making；不要加入 glycemic goals 或 A1C target，除非使用者同時問血糖。"
         "若問題是血脂、膽固醇、LDL 或三酸甘油脂治療目標，請加入 ADA section 10、dc26s010、lipid management、LDL cholesterol、statin therapy、primary prevention、secondary prevention、ASCVD、triglyceride；不要加入 glycemic goals 或 A1C target，除非使用者同時問血糖。"
@@ -2710,9 +2766,9 @@ def build_retrieval_query(
         return user_text
 
     data = extract_json_object(raw)
-    search_query = str(data.get("search_query") or "").strip()
+    search_query = sanitize_retrieval_plan_text(str(data.get("search_query") or ""))
     keywords = data.get("keywords") if isinstance(data.get("keywords"), list) else []
-    keyword_text = " ".join(str(keyword).strip() for keyword in keywords if str(keyword).strip())
+    keyword_text = sanitize_retrieval_plan_text(" ".join(str(keyword).strip() for keyword in keywords if str(keyword).strip()))
     context_excerpt = context_search_excerpt(recent_context) if contextual_guideline_followup(user_text, recent_context) else ""
     combined = " ".join(
         part for part in [user_text, context_excerpt, clinical_intent_text(clinical_intent), search_query, keyword_text] if part
@@ -3661,6 +3717,9 @@ def health() -> dict[str, Any]:
             "guideline_strict_grounding": True,
             "guideline_query_planning": LINE_QUERY_PLANNING_ENABLED,
             "clinical_intent_planning": LINE_QUERY_PLANNING_ENABLED,
+            "planner_expanded_search_queries": True,
+            "direct_general_knowledge_fallback": False,
+            "web_ai_research_request_only": True,
             "guideline_evidence_review": LINE_EVIDENCE_REVIEW_ENABLED,
             "all_mounted_guideline_sources": True,
             "ada_only_sources": False,
