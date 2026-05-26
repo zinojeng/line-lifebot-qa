@@ -29,6 +29,14 @@ class FtsRegressionCase:
 
 CASES = (
     FtsRegressionCase(
+        name="type1-universal-screening-routes-section2",
+        query="第一型糖尿病的病患，是否適合用普篩的方式來找出來呢？",
+        expected_terms=("type 1 diabetes screening", "2.7", "autoantibody", "islet"),
+        forbidden_terms=("masld", "mash", "retinopathy-foot-pad", "bone-glp1-muscle"),
+        forbidden_scope=2,
+        expected_top_path_prefix="queries/type-1-diabetes-screening-line-questions.md",
+    ),
+    FtsRegressionCase(
         name="retinopathy-evidence-grade-no-ckd-default",
         query="嚴重眼病變治療 證據等級是？",
         expected_terms=("section 12", "12.9", "12.12", "anti-vegf", "grade"),

@@ -59,6 +59,12 @@ BUILTIN_CASES = (
         forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "禁用", "完全不能使用", "absolutely forbidden"),
     ),
     RegressionCase(
+        "type1-universal-screening-zh",
+        "第一型糖尿病的病患，是否適合用普篩的方式來找出來呢？",
+        ("type 1 diabetes", "2.7", "autoantibody", "islet"),
+        forbidden_terms=("片段", "AACE", "no loaded guideline evidence", "沒有載入", "無相關指南", "目前快速問答暫時無法回覆", "MASLD", "MASH"),
+    ),
+    RegressionCase(
         "retinopathy-treatment-evidence-grade",
         "嚴重眼病變治療 證據等級是？",
         ("section 12", "12.9", "12.12", "grade a", "anti-vegf", "retinopathy"),
