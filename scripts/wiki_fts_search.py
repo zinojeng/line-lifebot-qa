@@ -267,8 +267,52 @@ def liver_context_query(query: str) -> bool:
     return has_liver_context(query)
 
 
+def bone_health_context_query(query: str) -> bool:
+    lower = query.lower()
+    return bool(
+        re.search(r"骨質疏鬆|骨鬆|骨折|骨密度|骨骼", query)
+        or re.search(r"\b(?:osteoporosis|bone health|fracture|fragility fracture|bone mineral density|bmd|dxa|t-score|frax)\b", lower)
+    )
+
+
+def neuropathy_or_pad_context_query(query: str) -> bool:
+    lower = query.lower()
+    return bool(
+        re.search(
+            r"神經病變|周邊神經|神經痛|手麻|腳麻|足麻|下肢|動脈阻塞|週邊動脈|周邊動脈|糖尿病足|足部|潰瘍|傷口|跛行|缺血|壞疽",
+            query,
+        )
+        or re.search(
+            r"\b(?:neuropathy|peripheral neuropathy|autonomic neuropathy|dpn|neuropathic pain|foot care|diabetic foot|foot ulcer|pad|peripheral artery|peripheral arterial|claudication|limb ischemia|amputation)\b",
+            lower,
+        )
+    )
+
+
+def type1_screening_query(query: str) -> bool:
+    lower = query.lower()
+    type1 = re.search(r"第一型糖尿病|第1型糖尿病|一型糖尿病", query) or re.search(
+        r"\b(?:type 1 diabetes|type one diabetes|t1dm?|t1d)\b", lower
+    )
+    screening = re.search(r"普篩|篩檢|篩查|自體抗體|自身抗體|胰島自體抗體", query) or re.search(
+        r"\b(?:screening|screen for|islet autoantibod(?:y|ies)|autoantibod(?:y|ies)|presymptomatic|teplizumab)\b",
+        lower,
+    )
+    section12 = section12_context_query(query)
+    return bool(
+        type1
+        and screening
+        and not section12
+        and not neuropathy_or_pad_context_query(query)
+        and not has_kidney_context(query)
+        and not has_liver_context(query)
+        and not bone_health_context_query(query)
+    )
+
+
 def rerank_rows(rows: list[sqlite3.Row | dict], query: str, limit: int) -> list[sqlite3.Row | dict]:
     best: dict[tuple[str, str], tuple[float, sqlite3.Row | dict]] = {}
+    type1_screening = type1_screening_query(query)
     for row in rows:
         path = str(row["path"])
         section = str(row["section"])
@@ -329,6 +373,17 @@ def rerank_rows(rows: list[sqlite3.Row | dict], query: str, limit: int) -> list[
                 score *= 3.0
             if not kidney_context_query(query) and any(term in haystack for term in ("ckd", "egfr", "albuminuria", "kidney")):
                 score *= 0.2
+        if type1_screening:
+            if "type-1-diabetes-screening" in path or "ada-2026-type-1-diabetes-screening" in path:
+                score *= 80.0
+            elif any(term in haystack for term in ("type 1 diabetes screening", "islet autoantibody", "第一型糖尿病普篩", "胰島自體抗體", "2.7")):
+                score *= 12.0
+            if path.startswith("inbox/") and not any(
+                term in haystack for term in ("type 1 diabetes screening", "islet autoantibody", "第一型糖尿病普篩", "胰島自體抗體")
+            ):
+                score *= 0.01
+            if any(term in haystack for term in ("masld", "mash", "nafld", "nash", "脂肪肝", "bone-glp1-muscle", "retinopathy-foot-pad")):
+                score *= 0.01
         key = (path, section)
         existing = best.get(key)
         if not existing or score > existing[0]:
@@ -369,6 +424,7 @@ def fallback_like_search(conn: sqlite3.Connection, query: str, limit: int) -> li
     ).fetchall()
     scored: list[tuple[float, sqlite3.Row]] = []
     exact_boost_enabled = should_apply_exact_phrase_boost(exact_query)
+    type1_screening = type1_screening_query(query)
     for row in rows:
         title = str(row["title"]).lower()
         section = str(row["section"]).lower()
@@ -444,6 +500,17 @@ def fallback_like_search(conn: sqlite3.Connection, query: str, limit: int) -> li
                 score *= 5.0
             if not kidney_context_query(query) and any(term in row_text for term in ("ckd", "egfr", "albuminuria", "kidney")):
                 score *= 0.2
+        if type1_screening:
+            if "type-1-diabetes-screening" in path or "ada-2026-type-1-diabetes-screening" in path:
+                score *= 80.0
+            elif any(term in row_text for term in ("type 1 diabetes screening", "islet autoantibody", "第一型糖尿病普篩", "胰島自體抗體", "2.7")):
+                score *= 12.0
+            if path.startswith("inbox/") and not any(
+                term in row_text for term in ("type 1 diabetes screening", "islet autoantibody", "第一型糖尿病普篩", "胰島自體抗體")
+            ):
+                score *= 0.01
+            if any(term in row_text for term in ("masld", "mash", "nafld", "nash", "脂肪肝", "bone-glp1-muscle", "retinopathy-foot-pad")):
+                score *= 0.01
         if score > 0:
             scored.append((score, row))
     scored.sort(key=lambda item: item[0], reverse=True)

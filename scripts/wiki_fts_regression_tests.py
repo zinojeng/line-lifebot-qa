@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts import wiki_fts_search
-from knowledge import KnowledgeChunk, chunk_excluded_for_query, domain_adjustment
+from knowledge import KnowledgeChunk, chunk_excluded_for_query, domain_adjustment, has_line_type1_screening_context, query_concepts
 
 
 DEFAULT_WIKI = Path("/Users/ander/Documents/hermes-agent/wiki/ada-kdigo-diabetes-wiki")
@@ -33,7 +33,7 @@ CASES = (
         query="第一型糖尿病的病患，是否適合用普篩的方式來找出來呢？",
         expected_terms=("type 1 diabetes screening", "2.7", "autoantibody", "islet"),
         forbidden_terms=("masld", "mash", "retinopathy-foot-pad", "bone-glp1-muscle"),
-        forbidden_scope=2,
+        forbidden_scope=5,
         expected_top_path_prefix="queries/type-1-diabetes-screening-line-questions.md",
     ),
     FtsRegressionCase(
@@ -115,6 +115,34 @@ def run_case(case: FtsRegressionCase, db: Path, limit: int) -> tuple[bool, str]:
 
 def run_chunk_exclusion_tests() -> list[str]:
     failures: list[str] = []
+    if not has_line_type1_screening_context("第一型糖尿病要不要普篩？"):
+        failures.append("FAIL\ttype1-screening-detector-zh-positive")
+    if not has_line_type1_screening_context("T1D islet autoantibody screening"):
+        failures.append("FAIL\ttype1-screening-detector-en-positive")
+    if not has_line_type1_screening_context("T1DM islet autoantibody screening"):
+        failures.append("FAIL\ttype1-screening-detector-t1dm-positive")
+    if has_line_type1_screening_context("第一型糖尿病合併 stage 2 CKD 怎麼處理？"):
+        failures.append("FAIL\ttype1-screening-detector-stage-ckd-negative")
+    if has_line_type1_screening_context("type 1 diabetes treatment with insulin"):
+        failures.append("FAIL\ttype1-screening-detector-treatment-negative")
+    if has_line_type1_screening_context("糖尿病要不要篩檢？"):
+        failures.append("FAIL\ttype1-screening-detector-general-diabetes-negative")
+    if "type1_screening" not in query_concepts("第一型糖尿病普篩", "第一型糖尿病普篩".lower()):
+        failures.append("FAIL\ttype1-screening-query-concept-positive")
+    if "type1_screening" in query_concepts("type 1 diabetes treatment with insulin", "type 1 diabetes treatment with insulin"):
+        failures.append("FAIL\ttype1-screening-query-concept-treatment-negative")
+    if "type1_screening" in query_concepts("第一型糖尿病的視網膜篩檢", "第一型糖尿病的視網膜篩檢".lower()):
+        failures.append("FAIL\ttype1-screening-query-concept-retinopathy-negative")
+    if "type1_screening" in query_concepts("screening for diabetic kidney disease in type 1 diabetes", "screening for diabetic kidney disease in type 1 diabetes"):
+        failures.append("FAIL\ttype1-screening-query-concept-kidney-negative")
+    if "type1_screening" in query_concepts("第一型糖尿病 骨質疏鬆 普篩", "第一型糖尿病 骨質疏鬆 普篩".lower()):
+        failures.append("FAIL\ttype1-screening-query-concept-bone-negative")
+    if wiki_fts_search.type1_screening_query("第一型糖尿病 骨質疏鬆 普篩"):
+        failures.append("FAIL\ttype1-screening-fts-bone-negative")
+    if wiki_fts_search.type1_screening_query("第一型糖尿病的視網膜篩檢"):
+        failures.append("FAIL\ttype1-screening-fts-retinopathy-negative")
+    if wiki_fts_search.type1_screening_query("type 1 diabetes peripheral neuropathy screening"):
+        failures.append("FAIL\ttype1-screening-fts-neuropathy-negative")
     liver_chunk = KnowledgeChunk(
         source="claims/ada-2026-masld-mash-claims.md",
         source_label="ADA 2026 MASLD MASH Claim Registry",
@@ -160,6 +188,33 @@ def run_chunk_exclusion_tests() -> list[str]:
         failures.append("FAIL\texact-phrase-cjk-alias-boosted")
     if not wiki_fts_search.should_apply_exact_phrase_boost("ada 2026 alias page"):
         failures.append("FAIL\texact-phrase-ascii-multitoken-boosted")
+    type1_query = "第一型糖尿病普篩"
+    type1_masld_chunk = KnowledgeChunk(
+        source="claims/ada-2026-masld-mash-claims.md",
+        source_label="ADA 2026 MASLD MASH Claim Registry",
+        title="ADA 2026 MASLD MASH Claim Registry",
+        section="Claim Cards",
+        chunk_type="llm_wiki_page",
+        text="MASLD MASH FIB-4 liver fibrosis.",
+        parent_text="",
+        metadata=("claim", "masld"),
+        tokens=(),
+    )
+    if not chunk_excluded_for_query(type1_query, type1_masld_chunk):
+        failures.append("FAIL\ttype1-screening-excludes-masld")
+    type1_section2_chunk = KnowledgeChunk(
+        source="queries/type-1-diabetes-screening-line-questions.md",
+        source_label="Type 1 Diabetes Screening LINE Questions",
+        title="Type 1 Diabetes Screening LINE Questions",
+        section="Route First",
+        chunk_type="llm_wiki_page",
+        text="ADA Section 2 type 1 diabetes screening islet autoantibodies Recommendation 2.7.",
+        parent_text="",
+        metadata=("type-1-diabetes", "screening", "autoantibodies"),
+        tokens=(),
+    )
+    if chunk_excluded_for_query(type1_query, type1_section2_chunk):
+        failures.append("FAIL\ttype1-screening-keeps-section2")
     section12_crossref_chunk = KnowledgeChunk(
         source="evidence-cards/ada-2026-section-12-retinopathy-neuropathy-foot-pad-recommendation-grades.md",
         source_label="ADA 2026 Section 12 Retinopathy Neuropathy Foot PAD Recommendation Grades",

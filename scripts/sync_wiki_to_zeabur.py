@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import shlex
@@ -111,6 +112,7 @@ def sync_wiki(
     reload_after: bool,
 ) -> None:
     archive = make_archive(local_wiki)
+    archive_sha256 = hashlib.sha256(archive).hexdigest()
     encoded = base64.b64encode(archive).decode("ascii")
     remote_parent = str(Path(remote_wiki).parent)
     remote_sync_dir = f"{remote_parent}/.wiki-sync-{uuid.uuid4().hex[:12]}"
@@ -121,6 +123,7 @@ def sync_wiki(
     print(f"local_wiki={local_wiki}")
     print(f"local_markdown_files={local_md_count}")
     print(f"archive_bytes={len(archive)} base64_chars={len(encoded)} chunks={(len(encoded) + chunk_chars - 1) // chunk_chars}")
+    print(f"archive_sha256={archive_sha256}")
 
     zeabur_exec(
         service_id,
@@ -145,7 +148,17 @@ def sync_wiki(
                 "fi; done"
             ),
             f"mkdir -p {shlex.quote(remote_parent)} {shlex.quote(remote_sync_dir)}",
+            f"test \"$(wc -c < {shlex.quote(remote_tmp_b64)} | tr -d ' ')\" = {shlex.quote(str(len(encoded)))}",
             f"base64 -d {shlex.quote(remote_tmp_b64)} > {shlex.quote(remote_tmp_tgz)}",
+            (
+                "REMOTE_SHA=$(if command -v sha256sum >/dev/null 2>&1; then "
+                f"sha256sum {shlex.quote(remote_tmp_tgz)} | awk '{{print $1}}'; "
+                "else python3 -c 'import hashlib, sys; "
+                "print(hashlib.sha256(open(sys.argv[1], \"rb\").read()).hexdigest())' "
+                f"{shlex.quote(remote_tmp_tgz)}; fi) && "
+                f"test \"$REMOTE_SHA\" = {shlex.quote(archive_sha256)}"
+            ),
+            f"tar -tzf {shlex.quote(remote_tmp_tgz)} >/dev/null",
             f"rm -rf {shlex.quote(remote_wiki)}",
             f"tar -xzf {shlex.quote(remote_tmp_tgz)} -C {shlex.quote(remote_parent)}",
             (

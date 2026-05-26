@@ -86,6 +86,19 @@ except ModuleNotFoundError:
         )
 
 
+# LINE-specific router helper; unlike the Section 12 helpers above, this is not imported from section12_routing.
+def has_line_type1_screening_context(text: str) -> bool:
+    lower = text.lower()
+    type1 = re.search(r"第一型糖尿病|第1型糖尿病|一型糖尿病", text) or re.search(
+        r"\b(?:type 1 diabetes|type one diabetes|t1dm?|t1d)\b", lower
+    )
+    screening = re.search(r"普篩|篩檢|篩查|自體抗體|自身抗體|胰島自體抗體", text) or re.search(
+        r"\b(?:screening|screen for|islet autoantibod(?:y|ies)|autoantibod(?:y|ies)|presymptomatic|teplizumab)\b",
+        lower,
+    )
+    return bool(type1 and screening)
+
+
 CKD_COMPARISON_PATH = "comparisons/ada-2026-vs-kdigo-2026-diabetes-ckd"
 CKD_EVIDENCE_STRENGTH_MAP_PATH = "comparisons/ada-kdigo-2026-evidence-strength-map"
 MASLD_CROSS_GUIDELINE_AGGREGATE_SOURCE = "compiled-cross-guideline-masld_mash"
@@ -385,6 +398,13 @@ QUERY_INTENT_VARIANTS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "diagnosis classification screening A1C fasting plasma glucose OGTT criteria",
             "prediabetes type 1 type 2 gestational diabetes screening diagnostic criteria",
+        ),
+    ),
+    (
+        ("第一型糖尿病", "第1型糖尿病", "一型糖尿病", "普篩", "自體抗體", "胰島自體抗體", "type 1 diabetes", "t1d", "islet autoantibody"),
+        (
+            "ADA section 2 type 1 diabetes screening islet autoantibodies insulin autoantibody GAD IA-2 ZnT8 Recommendation 2.6 2.7 2.8a 2.8b 2.9 2.10",
+            "presymptomatic type 1 diabetes screening family history elevated genetic risk confirmed autoantibodies staging teplizumab specialized center",
         ),
     ),
     (
@@ -3276,6 +3296,27 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
             "Metformin in GDM evidence gestational diabetes medication ADA 2026 pregnancy pharmacotherapy insulin metformin glyburide",
         ],
     },
+    "type1_screening": {
+        "concepts": ["type 1 diabetes screening", "islet autoantibody screening", "presymptomatic type 1 diabetes"],
+        "target_chapters": ["ADA S2 Diagnosis and Classification of Diabetes"],
+        "evidence_targets": [
+            "ADA 2026 Recommendation 2.6 screen for presymptomatic type 1 diabetes with insulin, GAD, IA-2, or ZnT8 autoantibodies",
+            "ADA 2026 Recommendation 2.7 offer autoantibody screening to people with family history of type 1 diabetes or known elevated genetic risk",
+            "ADA 2026 Recommendations 2.8a and 2.8b confirm positive autoantibodies, evaluate stage 3 diabetes, and refer multiple confirmed autoantibodies to specialized centers",
+            "ADA 2026 Recommendation 2.9 monitoring interval differs for multiple confirmed autoantibodies versus a single confirmed islet autoantibody",
+            "population-based screening is program-dependent and requires validated assays and follow-up resources",
+        ],
+        "avoid_routes": [
+            "do not answer type 1 diabetes screening from MASLD/MASH, CKD medication, retinopathy, or bone health pages",
+            "do not claim no guideline evidence is loaded when ADA Section 2 type 1 diabetes screening pages are retrieved",
+            "do not treat population-based screening as a blanket universal-screening mandate",
+        ],
+        "required_facets": ["diagnosis", "screening"],
+        "search_queries": [
+            "ADA section 2 dc26s002 type 1 diabetes screening islet autoantibodies insulin autoantibody GAD IA-2 ZnT8 Recommendation 2.6 2.7 2.8a 2.8b 2.9 2.10",
+            "第一型糖尿病 普篩 篩檢 胰島自體抗體 ADA 2026 2.6 2.7 2.8 2.9 teplizumab specialized center",
+        ],
+    },
     "ckd": {
         "concepts": ["CKD", "diabetic kidney disease", "eGFR", "albuminuria"],
         "target_chapters": ["ADA S11 CKD", "ADA S9 Pharmacologic Approaches", "KDIGO Diabetes and CKD"],
@@ -3387,6 +3428,12 @@ def clinical_search_brain_plan(query: str) -> dict[str, list[str]]:
     )
     if diabetes_pregnancy_specific and (pregnancy_drug_specific or generic_gdm_medication):
         concepts.add("gdm_pharmacotherapy")
+    if has_line_type1_screening_context(query) and not (
+        ({"retinopathy", "neuropathy", "pad", "bone_health", "ckd", "liver"} & concepts)
+        or has_kidney_context(query)
+        or has_liver_context(query)
+    ):
+        concepts.add("type1_screening")
     if any(term in query for term in ("脂肪肝", "脂肪性肝炎", "代謝性脂肪肝", "肝硬化", "肝纖維")) or any(
         term in lower for term in ("masld", "mash", "nafld", "nash", "steatotic liver", "steatohepatitis", "cirrhosis")
     ):
@@ -3489,6 +3536,12 @@ def query_concepts(query: str, query_lower: str | None = None) -> set[str]:
     )
     if diabetes_pregnancy_specific and (pregnancy_drug_specific or generic_gdm_medication):
         concepts.add("gdm_pharmacotherapy")
+    if has_line_type1_screening_context(query) and not (
+        ({"retinopathy", "neuropathy", "pad", "bone_health", "ckd", "liver"} & concepts)
+        or has_kidney_context(query)
+        or has_liver_context(query)
+    ):
+        concepts.add("type1_screening")
     if (
         any(term in query for term in ("血壓", "高血壓"))
         or any(term in lower for term in ("blood pressure", "hypertension", "bp target", "bp goal"))
@@ -4105,6 +4158,7 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
     lipid_target_query = "lipid_target" in concepts
     bone_health_query = "bone_health" in concepts
     evidence_grade_query = "evidence_grade" in concepts
+    type1_screening_query = "type1_screening" in concepts
 
     if chunk.chunk_type == "table_row":
         adjustment *= 1.25
@@ -4190,6 +4244,26 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
         haystack,
     ):
         adjustment *= 0.12
+    if type1_screening_query and re.search(
+        r"\b(type 1 diabetes screening|t1d screening|presymptomatic type 1 diabetes|islet autoantibod(?:y|ies)|autoantibod(?:y|ies)|insulin autoantibody|gad|ia-2|znt8|teplizumab|2\.6|2\.7|2\.8a|2\.8b|2\.9|2\.10)\b|第一型糖尿病|第1型糖尿病|一型糖尿病|普篩|胰島自體抗體|自體抗體|自身抗體",
+        haystack,
+    ):
+        adjustment *= 14.0
+    if type1_screening_query and (
+        "type-1-diabetes-screening" in haystack
+        or "ada-2026-type-1-diabetes-screening" in haystack
+        or "dc26s002" in haystack
+        or "diagnosis and classification" in haystack
+    ):
+        adjustment *= 24.0
+    if type1_screening_query and re.search(
+        r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fib-4|retinopathy|neuropathy|foot care|pad|osteoporosis|bone health|ckd-cardiorenal|uacr|albuminuria|finerenone)\b|脂肪肝|骨質疏鬆|視網膜|神經病變|足部|腎",
+        haystack,
+    ) and not re.search(
+        r"\b(type 1 diabetes screening|islet autoantibod(?:y|ies)|autoantibod(?:y|ies)|2\.6|2\.7|2\.8a|2\.8b|2\.9|2\.10)\b|第一型糖尿病|胰島自體抗體|自體抗體",
+        haystack,
+    ):
+        adjustment *= 0.01
     if bone_health_query and re.search(
         r"\b(osteoporosis|bone health|fracture risk|fragility fracture|bone mineral density|bmd|dxa|t-score|frax|calcium|vitamin d|bisphosphonate|denosumab|romosozumab|thiazolidinedione|sulfonylurea)\b|骨質疏鬆|骨鬆|骨折|骨密度|骨骼",
         haystack,
@@ -4463,12 +4537,29 @@ def domain_adjustment(query: str, chunk: KnowledgeChunk) -> float:
 def chunk_excluded_for_query(query: str, chunk: KnowledgeChunk) -> bool:
     lower = query.lower()
     concepts = query_concepts(query, lower)
+    type1_screening_query = "type1_screening" in concepts
     evidence_grade_query = "evidence_grade" in concepts
     section12_evidence_grade_query = evidence_grade_query and (
         "retinopathy" in concepts or "neuropathy" in concepts or "pad" in concepts
     )
     liver_evidence_grade_query = evidence_grade_query and has_liver_context(query)
     kidney_query = has_kidney_context(query)
+    if type1_screening_query:
+        origin_haystack = f"{chunk.source} {chunk.source_label} {chunk.title} {chunk.section} {' '.join(chunk.metadata)}".lower()
+        if not has_liver_context(query) and (
+            re.search(r"脂肪肝|脂肪性肝炎|代謝性脂肪肝|肝硬化|肝纖維", origin_haystack)
+            or re.search(
+            r"\b(masld|mash|nafld|nash|steatotic liver|steatohepatitis|fatty liver|fib-4)\b",
+            origin_haystack,
+            )
+        ):
+            return True
+        if not kidney_query and "ckd-cardiorenal" in origin_haystack:
+            return True
+        if not ({"retinopathy", "neuropathy", "pad"} & concepts) and "retinopathy-foot-pad" in origin_haystack:
+            return True
+        if "bone_health" not in concepts and "bone-glp1-muscle" in origin_haystack:
+            return True
     if not (section12_evidence_grade_query or liver_evidence_grade_query) or kidney_query:
         return False
     origin_haystack = f"{chunk.source} {chunk.source_label} {chunk.title} {chunk.section} {' '.join(chunk.metadata)}".lower()
