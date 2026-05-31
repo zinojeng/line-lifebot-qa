@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .metadata_cache/
+.codebase-memory/
 .DS_Store
 Icon?
 Icon
