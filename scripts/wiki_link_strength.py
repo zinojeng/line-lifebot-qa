@@ -118,10 +118,15 @@ def resolve_page(all_paths: set[str], link: str) -> str | None:
     normalized = normalize_link(link)
     candidates = {normalized, f"{normalized}.md"}
     basename = Path(normalized).name
+    basename_matches: list[str] = []
     for path in all_paths:
         stem = strip_md(path)
-        if path in candidates or stem in candidates or Path(stem).name == basename:
+        if path in candidates or stem in candidates:
             return path
+        if Path(stem).name == basename:
+            basename_matches.append(path)
+    if len(basename_matches) == 1:
+        return basename_matches[0]
     return None
 
 
@@ -394,8 +399,11 @@ def write_outputs(root: Path, payload: dict[str, Any]) -> tuple[Path, Path]:
     for row in payload["top_nodes"][:20]:
         lines.append(f"- `{row['path']}`: score {row['score']}; signals {row['signals']}")
     lines.extend(["", "## Weak Or Underconnected Pages", ""])
-    for row in payload["weak_nodes"][:20]:
-        lines.append(f"- `{row['path']}`: score {row['score']}; aliases {row['aliases']}; wikilinks {row['wikilinks']}")
+    if payload["weak_nodes"]:
+        for row in payload["weak_nodes"][:20]:
+            lines.append(f"- `{row['path']}`: score {row['score']}; aliases {row['aliases']}; wikilinks {row['wikilinks']}")
+    else:
+        lines.append("- None")
     lines.extend(["", "## Negative Edges", ""])
     if payload["negative_edges"]:
         for row in payload["negative_edges"][:20]:
