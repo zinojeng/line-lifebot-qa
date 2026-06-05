@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -58,6 +59,16 @@ CASES = (
         name="ckd-evidence-grade-still-routes-ckd",
         query="58歲第二型糖尿病 eGFR 42 UACR 380，ADA/KDIGO 哪些建議是 strong recommendation，哪些證據等級較低？",
         expected_terms=("ckd-cardiorenal", "11.7a", "4.3.1", "grade c", "lower-certainty"),
+    ),
+    FtsRegressionCase(
+        name="ckd-uacr-ace-arb-grade-routes-threshold-contract",
+        query="UACR 150 ACEi ARB 的證據等級？",
+        expected_terms=("ckd-cardiorenal", "11.6a", "10.10", "30-299", "grade b"),
+    ),
+    FtsRegressionCase(
+        name="ckd-sglt2i-dialysis-boundary-grade-routes-threshold-contract",
+        query="eGFR 18，SGLT2i 到洗腎前後的建議等級？",
+        expected_terms=("ckd-cardiorenal", "11.11a", "4.3.6", "dialysis"),
     ),
     FtsRegressionCase(
         name="generic-evidence-grade-does-not-ckd-lock",
@@ -231,6 +242,53 @@ def run_chunk_exclusion_tests() -> list[str]:
     return failures
 
 
+def run_content_contract_tests(wiki: Path) -> list[str]:
+    failures: list[str] = []
+    contract_files = (
+        wiki / "claims" / "ada-kdigo-2026-ckd-cardiorenal-claims.md",
+        wiki / "evidence-cards" / "ada-kdigo-2026-ckd-cardiorenal-recommendation-grades.md",
+        wiki / "claims" / "ada-2026-retinopathy-foot-pad-claims.md",
+        wiki / "evidence-cards" / "ada-2026-section-12-retinopathy-neuropathy-foot-pad-recommendation-grades.md",
+        wiki / "claims" / "ada-2026-masld-mash-claims.md",
+    )
+    text_parts: list[str] = []
+    for path in contract_files:
+        if not path.exists():
+            failures.append(f"FAIL\tckd-content-contract-missing-file\t{path}")
+            continue
+        text_parts.append(path.read_text(encoding="utf-8", errors="replace").lower())
+    text = "\n".join(text_parts)
+    normalized = (
+        text.replace("≥", ">=")
+        .replace("≤", "<=")
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+    required_patterns = (
+        ("10.10", r"\b10\.10\b"),
+        ("11.6a", r"\b11\.6a\b"),
+        ("11.7a", r"\b11\.7a\b"),
+        ("11.11a", r"\b11\.11a\b"),
+        ("11.11b", r"\b11\.11b\b"),
+        ("4.2.1", r"\b4\.2\.1\b"),
+        ("4.3.1", r"\b4\.3\.1\b"),
+        ("4.3.6", r"\b4\.3\.6\b"),
+        ("4.5.9", r"\b4\.5\.9\b"),
+        ("30-299", r"\b30\s*-\s*299\b"),
+        ("UACR >=300", r"\buacr\s*>=\s*300\b"),
+        ("eGFR <60", r"\begfr\s*<\s*60\b"),
+        ("Grade B", r"\bgrade\s+b\b"),
+        ("Grade C", r"\bgrade\s+c\b"),
+        ("Section 12 12.12 with grade A", r"\b12\.12\b[\s\S]{0,120}(?:\bgrade\s+a\b|\|\s*a\s*\|)"),
+        ("Section 12 12.22 with grade A/B", r"\b12\.22\b[\s\S]{0,240}(?:\bgrade\s+[ab]\b|\|\s*[ab]\s*\|)"),
+        ("MASLD 4.27a with grade A/B", r"\b4\.27a\b[\s\S]{0,240}(?:\bgrade\s+[ab]\b|\|\s*[ab]\s*\|)"),
+    )
+    for label, pattern in required_patterns:
+        if not re.search(pattern, normalized):
+            failures.append(f"FAIL\tckd-content-contract-missing-token\t{label}")
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Local SQLite FTS regression tests for LLM Wiki evidence-grade routing.")
     parser.add_argument("--wiki", type=Path, default=DEFAULT_WIKI)
@@ -252,6 +310,10 @@ def main() -> int:
     for failure in chunk_failures:
         print(failure)
     failures.extend(chunk_failures)
+    contract_failures = run_content_contract_tests(args.wiki)
+    for failure in contract_failures:
+        print(failure)
+    failures.extend(contract_failures)
     if failures:
         print("\nFailures:", file=sys.stderr)
         for failure in failures:

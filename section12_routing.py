@@ -47,7 +47,7 @@ def has_kidney_context(text: str) -> bool:
     lower = text.lower()
     return bool(
         re.search(r"腎|腎絲球|腎病變|腎衰竭|尿蛋白|白蛋白尿", text)
-        or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone)\b", lower)
+        or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone|dialysis|hemodialysis|krt|eskd|esrd)\b", lower)
     )
 
 

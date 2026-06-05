@@ -75,7 +75,7 @@ except ModuleNotFoundError:
         lower = text.lower()
         return bool(
             re.search(r"腎|腎絲球|腎病變|腎衰竭|尿蛋白|白蛋白尿", text)
-            or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone)\b", lower)
+            or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone|dialysis|hemodialysis|krt|eskd|esrd)\b", lower)
         )
 
     def has_liver_context(text: str) -> bool:
@@ -3185,6 +3185,21 @@ def concept_route_variants(query: str, query_lower: str) -> list[QueryVariant]:
                 ),
             ]
         )
+    if (has_kidney_context(query) or re.search(r"\b(?:acei|ace inhibitor|arbs?|angiotensin)\b", query_lower)) and "evidence_grade" in concepts:
+        variants.extend(
+            [
+                QueryVariant(
+                    "concept_ckd_evidence_grade_contract",
+                    f"{query} Evidence Grade Router MOC ADA/KDIGO CKD cardiorenal threshold consistency contract ADA 10.10 ADA 11.6a ADA 11.7a ADA 11.11a ADA 11.11b KDIGO 4.2.1 KDIGO 4.3.1 KDIGO 4.3.6 KDIGO 4.5.9 UACR 30-299 Grade B UACR >=300 eGFR <60 Grade A eGFR >=20 continue below 20 until KRT dialysis boundary",
+                    1.0,
+                ),
+                QueryVariant(
+                    "concept_ckd_claim_registry_grade",
+                    f"{query} ADA KDIGO 2026 CKD cardiorenal claim registry recommendation grade strong recommendation practice point SGLT2 inhibitor ACEi ARB albuminuria UACR eGFR dialysis GLP-1 RA",
+                    1.0,
+                ),
+            ]
+        )
     return variants
 
 
@@ -3320,11 +3335,24 @@ CLINICAL_CONCEPT_PROFILES: dict[str, dict[str, list[str]]] = {
     "ckd": {
         "concepts": ["CKD", "diabetic kidney disease", "eGFR", "albuminuria"],
         "target_chapters": ["ADA S11 CKD", "ADA S9 Pharmacologic Approaches", "KDIGO Diabetes and CKD"],
-        "evidence_targets": ["SGLT2 inhibitor", "GLP-1 RA", "metformin eGFR limitation", "finerenone", "albuminuria/UACR", "hypoglycemia risk"],
+        "evidence_targets": [
+            "ADA/KDIGO CKD cardiorenal threshold consistency contract",
+            "ADA 10.10 and 11.6a ACEi/ARB albuminuria recommendation grades",
+            "ADA 11.7a and KDIGO 4.3.1 SGLT2 inhibitor eGFR >=20 recommendation grades",
+            "ADA 11.11a and KDIGO Practice Point 4.3.6 SGLT2 inhibitor continuation below eGFR 20 until KRT",
+            "ADA 11.11b and KDIGO Practice Point 4.5.9 GLP-1 RA dialysis lower-certainty guidance",
+            "SGLT2 inhibitor",
+            "GLP-1 RA",
+            "metformin eGFR limitation",
+            "finerenone",
+            "albuminuria/UACR",
+            "hypoglycemia risk",
+        ],
         "avoid_routes": ["do not answer CKD medication selection from glucose efficacy alone"],
         "required_facets": ["kidney_context"],
         "search_queries": [
-            "CKD diabetes eGFR albuminuria UACR SGLT2 inhibitor GLP-1 RA metformin finerenone kidney cardiovascular protection KDIGO ADA"
+            "CKD diabetes eGFR albuminuria UACR SGLT2 inhibitor GLP-1 RA metformin finerenone kidney cardiovascular protection KDIGO ADA",
+            "ADA/KDIGO CKD cardiorenal threshold consistency contract ADA 10.10 ADA 11.6a ADA 11.7a ADA 11.11a ADA 11.11b KDIGO 4.2.1 4.3.1 4.3.6 4.5.9 UACR 30-299 Grade B UACR >=300 eGFR <60 Grade A eGFR >=20 dialysis boundary",
         ],
     },
     "liver": {
@@ -3917,7 +3945,7 @@ def hit_facets_from_text(
         f"{' '.join(metadata)} {excerpt} {parent_excerpt[:900]}"
     ).lower()
     facets: set[str] = set()
-    if re.search(r"\b(ckd|kidney|renal|egfr|albuminuria|uacr|dialysis|eskd|esrd)\b", haystack):
+    if re.search(r"\b(ckd|kidney|renal|egfr|albuminuria|uacr|dialysis|hemodialysis|krt|eskd|esrd)\b", haystack):
         facets.add("kidney_context")
     if re.search(
         r"\b(glycemic goal|glycemic goals|glycemic target|glucose target|a1c goal|a1c goals|individualized a1c|individualized .*cgm goals|time in range goal|tir goal|table 6\.2|figure 6\.1)\b",
@@ -3933,7 +3961,7 @@ def hit_facets_from_text(
         haystack,
     ):
         facets.add("technology_indication")
-    if re.search(r"\b(sglt2|glp-1|insulin|metformin|finerenone|glucagon|pharmacologic|medication|dose|dosage)\b", haystack):
+    if re.search(r"\b(sglt2|glp-1|insulin|metformin|finerenone|glucagon|acei|ace inhibitor|arbs?|angiotensin|pharmacologic|medication|dose|dosage)\b", haystack):
         facets.add("medication")
     if re.search(r"\b(mg/dl|mmol/l|ml/min|%|threshold|criteria|fasting|1 h|2 h|3 h|≥|<=|<|>)\b", haystack):
         facets.add("threshold")

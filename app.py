@@ -34,7 +34,7 @@ except ModuleNotFoundError:
         lower = text.lower()
         return bool(
             re.search(r"腎|腎絲球|腎病變|腎衰竭|尿蛋白|白蛋白尿", text)
-            or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone)\b", lower)
+            or re.search(r"\b(?:ckd|kidney|renal|egfr|uacr|albuminuria|proteinuria|kdigo|finerenone|dialysis|hemodialysis|krt|eskd|esrd)\b", lower)
         )
 
     def has_liver_context(text: str) -> bool:
@@ -126,7 +126,7 @@ except ModuleNotFoundError:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com").rstrip("/")
-APP_VERSION = os.getenv("APP_VERSION", "2026-05-21-wiki-self-heal-v46")
+APP_VERSION = os.getenv("APP_VERSION", "2026-06-06-evidence-router-v47")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").strip().lower()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro")
@@ -2231,6 +2231,27 @@ def section12_evidence_grade_context(user_text: str, recent_context: str = "") -
     return section12_topic_from_context(user_text, recent_context)
 
 
+def ckd_evidence_grade_context(text: str) -> bool:
+    lower = text.lower()
+    if has_kidney_context(text):
+        return True
+    blood_pressure_target = (
+        (re.search(r"血壓|高血壓", text) or re.search(r"\b(?:blood pressure|hypertension|bp)\b", lower))
+        and (re.search(r"目標|控制|標準|多少|幾", text) or re.search(r"\b(?:target|goal|control|threshold)\b", lower))
+    )
+    if blood_pressure_target:
+        return False
+    cardiovascular_nonrenal = bool(
+        re.search(r"心衰|心臟衰竭|冠心|冠狀動脈|心肌梗塞|心血管", text)
+        or re.search(r"\b(?:heart failure|hf|ascvd|cad|coronary|myocardial infarction|post-mi|post mi)\b", lower)
+    )
+    if cardiovascular_nonrenal:
+        return False
+    return bool(
+        re.search(r"\b(?:acei|ace inhibitor|arbs?|angiotensin)\b", lower)
+    )
+
+
 def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[str, Any]:
     context_excerpt = context_search_excerpt(recent_context)
     planning_text = f"{user_text} {context_excerpt}" if contextual_guideline_followup(user_text, recent_context) else user_text
@@ -2483,37 +2504,100 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
             ],
         }
         return merge_clinical_brain(intent, brain_plan)
-    if evidence_grade_followup(user_text, recent_context):
+    if evidence_grade_followup(user_text, recent_context) and ckd_evidence_grade_context(planning_text):
         intent = {
-            "clinical_intent": "guideline_evidence_grade_followup",
+            "clinical_intent": "ckd_threshold_evidence_grade_followup",
             "question_type": "evidence_grade_comparison",
             "patient_context": [user_text, context_excerpt],
             "must_retrieve": [
+                "Evidence Grade Router MOC",
+                "ADA/KDIGO CKD cardiorenal claim registry",
+                "ADA/KDIGO 2026 CKD cardiorenal threshold consistency contract",
+                "ADA 2026 Section 10 Recommendation 10.10 ACEi or ARB albuminuria eGFR recommendation grade",
+                "ADA 2026 Section 11 Recommendation 11.6a ACEi or ARB UACR 30-299 Grade B UACR >=300 or eGFR <60 Grade A",
+                "ADA 2026 Section 11 Recommendation 11.7a SGLT2 inhibitor eGFR >=20 Grade A",
+                "ADA 2026 Section 11 Recommendation 11.11a continue SGLT2 inhibitor eGFR below 20 before dialysis Grade B/C",
+                "ADA 2026 Section 11 Recommendation 11.11b GLP-1 receptor agonist dialysis Grade C",
+                "KDIGO 2026 Recommendation 4.2.1 ACEi or ARB diabetes hypertension albuminuria 1B",
+                "KDIGO 2026 Recommendation 4.3.1 SGLT2 inhibitor eGFR >=20 1A",
+                "KDIGO 2026 Practice Point 4.3.6 continue SGLT2 inhibitor until KRT if tolerated",
+                "KDIGO 2026 Practice Point 4.5.9 GLP-1 receptor agonist dialysis",
+            ],
+            "required_facets": ["kidney_context"],
+            "concepts": [
+                "CKD",
+                "eGFR",
+                "UACR",
+                "albuminuria",
+                "SGLT2 inhibitor",
+                "GLP-1 RA",
+                "ACEi ARB",
+                "dialysis",
+                "KDIGO 2026",
+                "ADA 2026 Section 11",
+                "CKD threshold consistency contract",
+            ],
+            "target_chapters": [
+                "ADA S10 Cardiovascular Disease and Risk Management",
+                "ADA S11 Chronic Kidney Disease",
+                "KDIGO diabetes management in CKD",
+            ],
+            "evidence_targets": [
+                "ADA 10.10",
+                "ADA 11.6a",
+                "ADA 11.7a",
+                "ADA 11.11a",
+                "ADA 11.11b",
+                "KDIGO 4.2.1",
+                "KDIGO 4.3.1",
+                "KDIGO 4.3.6",
+                "KDIGO 4.5.9",
+                "UACR 30-299 Grade B",
+                "UACR >=300 Grade A",
+                "eGFR <60 Grade A",
+                "eGFR >=20",
+                "continue below 20 until KRT",
+                "dialysis boundary",
+                "strong recommendation",
+                "practice point",
+            ],
+            "avoid_routes": [
+                "Do not answer CKD evidence-grade questions from Section 12 retinopathy/neuropathy/foot evidence cards unless those complications are also asked.",
+                "Do not imply SGLT2 inhibitor continuation after chronic dialysis; keep the dialysis/KRT boundary explicit.",
+            ],
+            "answer_strategy": (
+                "Route kidney-context evidence-grade questions to the CKD threshold consistency contract first. "
+                "Separate ACEi/ARB albuminuria grades, SGLT2i eGFR initiation/continuation rules, and dialysis GLP-1 RA lower-certainty guidance. "
+                "If exact ADA/KDIGO grade is not retrieved, state the missing grade instead of inventing it."
+            ),
+            "do_not_answer_with": [
+                "out-of-scope refusal for short evidence-grade follow-up",
+                "CKD-only answer that omits UACR/eGFR thresholds when the user asks thresholds",
+                "Section 12-only evidence grade answer",
+                "invented recommendation grades",
+            ],
+        }
+        return merge_clinical_brain(intent, brain_plan)
+    if evidence_grade_followup(user_text, recent_context):
+        intent = {
+            "clinical_intent": "unresolved_context_evidence_grade_followup",
+            "question_type": "evidence_grade_comparison",
+            "patient_context": [user_text, context_excerpt],
+            "must_retrieve": [
+                "Evidence Grade Router MOC",
                 "ADA 2026 recommendation grade evidence level",
                 "KDIGO 2026 recommendation strength grade 1 grade 2 evidence quality A B C D",
-                "SGLT2 inhibitor CKD strong recommendation evidence",
-                "GLP-1 RA ASCVD CKD evidence grade",
-                "metformin CKD eGFR evidence grade",
-                "finerenone albuminuria CKD recommendation evidence",
-                "glycemic target individualized A1C evidence grade",
             ],
-            "required_facets": ["kidney_context", "medication", "ascvd_context", "treatment"],
+            "required_facets": [],
             "concepts": [
                 "recommendation strength",
                 "evidence grade",
-                "SGLT2 inhibitor",
-                "GLP-1 RA",
-                "CKD",
-                "ASCVD",
-                "albuminuria",
+                "Evidence Grade Router MOC",
                 "ADA 2026",
                 "KDIGO 2026",
             ],
             "target_chapters": [
-                "ADA S9 pharmacologic approaches",
-                "ADA S10 cardiovascular disease and risk management",
-                "ADA S11 chronic kidney disease",
-                "KDIGO diabetes management in CKD",
+                "Evidence Grade Router MOC",
             ],
             "evidence_targets": [
                 "strong recommendation",
@@ -2525,12 +2609,15 @@ def fallback_clinical_intent(user_text: str, recent_context: str = "") -> dict[s
                 "lower certainty evidence",
             ],
             "answer_strategy": (
-                "Use the previous clinical scenario from recent context. Separate strong/high-certainty recommendations "
-                "from lower-certainty, conditional, consensus, or individualized recommendations. If exact KDIGO/ADA "
-                "grade is not present in retrieved evidence, state that limitation rather than inventing a grade."
+                "Use the previous clinical scenario from recent context before selecting evidence cards. "
+                "Do not default to CKD merely because the user asks 證據等級/建議等級. "
+                "Separate strong/high-certainty recommendations from lower-certainty, conditional, consensus, or individualized recommendations. "
+                "If exact KDIGO/ADA grade is not present in retrieved evidence, state that limitation rather than inventing a grade."
             ),
             "do_not_answer_with": [
                 "out-of-scope refusal for short follow-up",
+                "CKD/cardiorenal-only evidence grade answer without kidney context",
+                "retinopathy/neuropathy/foot/PAD evidence grade answer without matching recent context",
                 "model general medical knowledge",
                 "invented recommendation grades",
             ],
@@ -2665,7 +2752,8 @@ def build_clinical_intent(api_key: str, user_text: str, recent_context: str) -> 
         "若短 follow-up 問「證據等級/建議等級」且最近脈絡是視網膜病變、嚴重眼病變、DME、PDR、NPDR、anti-VEGF、雷射、眼科，請理解為 ADA S12 retinopathy treatment evidence grade；target_chapters 應包含 ADA S12；evidence_targets 應包含 12.9-12.16、Grade A、Grade E；avoid_routes 要說不要預設走 CKD/cardiorenal evidence cards。"
         "若短 follow-up 問「藥物的證據等級/治療等級」且最近脈絡是神經病變、DPN、神經痛、gabapentinoids、SNRI、TCA、sodium channel blocker、opioid、tramadol，請理解為 ADA S12 neuropathy treatment evidence grade；evidence_targets 應包含 12.20、12.21、12.22、Grade A/B/C/E；required_facets 應包含 medication, treatment。"
         "若短 follow-up 問證據等級且最近脈絡是糖尿病足、PAD、周邊動脈、LOPS、monofilament、ABI、toe pressure，請理解為 ADA S12 foot/PAD recommendation grade；evidence_targets 應包含 12.23-12.29、Grade A/B；required_facets 應包含 foot_care, pad_context。"
-        "若本次問題很短，像「哪些證據等級較低」、「哪些是 strong recommendation」、「那證據等級呢」，請使用最近對話脈絡還原上一題的疾病、藥物與指南範圍；question_type 應是 evidence_grade_comparison，required_facets 至少包含 medication, treatment，evidence_targets 應包含 recommendation strength、evidence grade、strong/conditional、grade 1/2、A/B/C/D、expert consensus。不要把這種短 follow-up 判成 out-of-scope。"
+        "若證據等級問題含腎臟上下文，例如 eGFR、UACR、albuminuria、尿蛋白、CKD、KDIGO、SGLT2i、finerenone、ACEi/ARB、透析或洗腎，請理解為 CKD threshold evidence grade；target_chapters 應包含 ADA S10、ADA S11、KDIGO diabetes management in CKD；evidence_targets 應包含 ADA 10.10、11.6a、11.7a、11.11a、11.11b、KDIGO 4.2.1、4.3.1、4.3.6、4.5.9、UACR 30-299 Grade B、UACR >=300/eGFR <60 Grade A、eGFR >=20、continue below 20 until KRT、dialysis boundary。"
+        "若本次問題很短，像「哪些證據等級較低」、「哪些是 strong recommendation」、「那證據等級呢」，請使用最近對話脈絡還原上一題的疾病、藥物與指南範圍；question_type 應是 evidence_grade_comparison，evidence_targets 應包含 recommendation strength、evidence grade、strong/conditional、grade 1/2、A/B/C/D、expert consensus。若最近脈絡沒有腎臟、eGFR、UACR、SGLT2i、finerenone、ACEi/ARB、透析或 KDIGO，不要預設走 CKD/cardiorenal evidence cards，也不要把這種短 follow-up 判成 out-of-scope。"
         "若問題是特定 eGFR 數值下的用藥/合併用藥，question_type 必須是 medication_threshold_comparison，"
         "must_retrieve 要包含 SGLT2 eGFR threshold、metformin eGFR limitation、GLP-1 RA in CKD、finerenone/nsMRA eGFR threshold、advanced CKD hypoglycemia/insulin safety。"
         "answer_strategy 要明確說明：用檢索到的 eGFR 門檻與使用者 eGFR 數值比較，不需要文件逐字出現 exact eGFR 數字。"
@@ -2742,7 +2830,8 @@ def build_retrieval_query(
         "若本次問題是短 follow-up，詢問證據等級、strong recommendation、conditional recommendation、grade 1/2、A/B/C/D 或哪些證據較低，且最近脈絡含視網膜病變、眼病變、DME、NPDR、PDR、anti-VEGF、雷射或眼科，請加入 Evidence Grade Router MOC、ADA section 12、dc26s012、Retinopathy Neuropathy and Foot Care、Recommendation 12.9、12.10、12.11、12.12、12.13、12.15、12.16、retinopathy treatment evidence grade、DME、PDR、anti-VEGF、panretinal laser photocoagulation、vision rehabilitation。"
         "若本次問題是短 follow-up，詢問藥物或治療的證據等級，且最近脈絡含神經病變、DPN、神經痛、gabapentinoids、SNRI、TCA、sodium channel blocker、opioid、tramadol 或 tapentadol，請加入 Evidence Grade Router MOC、ADA section 12、dc26s012、Recommendation 12.20、12.21、12.22、diabetic neuropathy treatment grade、neuropathic pain medication grade diabetes。"
         "若本次問題是短 follow-up，詢問證據等級且最近脈絡含糖尿病足、foot、PAD、周邊動脈、LOPS、monofilament、ABI 或 toe pressure，請加入 Evidence Grade Router MOC、ADA section 12、dc26s012、Recommendation 12.23、12.24、12.25、12.27、12.29、foot PAD recommendation grade。"
-        "若本次問題是短 follow-up，詢問證據等級、strong recommendation、conditional recommendation、grade 1/2、A/B/C/D 或哪些證據較低，請從最近對話脈絡帶入上一題的疾病、用藥與指南範圍，並加入 ADA 2026、KDIGO 2026、recommendation strength、evidence grade、strong recommendation、conditional recommendation、expert consensus、SGLT2 inhibitor、GLP-1 RA、metformin、insulin、finerenone、CKD、ASCVD、albuminuria。"
+        "若證據等級問題含腎臟上下文，例如 eGFR、UACR、albuminuria、尿蛋白、CKD、KDIGO、SGLT2i、finerenone、ACEi/ARB、透析或洗腎，請加入 Evidence Grade Router MOC、ADA/KDIGO CKD cardiorenal claim registry、CKD threshold consistency contract、ADA 10.10、ADA 11.6a、ADA 11.7a、ADA 11.11a、ADA 11.11b、KDIGO 4.2.1、KDIGO 4.3.1、KDIGO 4.3.6、KDIGO 4.5.9、UACR 30-299 Grade B、UACR >=300/eGFR <60 Grade A、eGFR >=20、continue below 20 until KRT、dialysis boundary。"
+        "若本次問題是短 follow-up，詢問證據等級、strong recommendation、conditional recommendation、grade 1/2、A/B/C/D 或哪些證據較低，請從最近對話脈絡帶入上一題的疾病、用藥與指南範圍，並加入 ADA 2026、KDIGO 2026、recommendation strength、evidence grade、strong recommendation、conditional recommendation、expert consensus。不要在沒有腎臟上下文時自動加入 SGLT2i、finerenone、CKD、albuminuria 或 KDIGO CKD route。"
         "不要新增使用者沒有問到的病情、診斷、用藥劑量或結論。"
         "只輸出 JSON，格式為：{\"search_query\":\"...\",\"keywords\":[\"...\"]}。"
     )
@@ -2781,6 +2870,28 @@ def local_evidence_coverage(
     hits: list[KnowledgeHit],
     clinical_intent: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
+    grade_intent_text = f"{(clinical_intent or {}).get('clinical_intent', '')} {(clinical_intent or {}).get('question_type', '')}".lower()
+    grade_question = "ckd_threshold_evidence_grade" in grade_intent_text or "mixed_ckd_" in grade_intent_text
+    if grade_question:
+        evidence_text = " ".join(
+            " ".join(
+                str(getattr(hit, field, ""))
+                for field in ("source", "source_label", "title", "section", "chunk_type", "excerpt", "parent_excerpt")
+            )
+            + " "
+            + " ".join(str(item) for item in getattr(hit, "metadata", ()) or ())
+            for hit in hits
+        ).lower()
+        has_grade_evidence = bool(
+            re.search(
+                r"\b(?:grade\s+[abcde]|grade\s+[12]|(?<!\.)[12][abcd]|strong recommendation|conditional recommendation|practice point|recommendation strength|evidence quality|recommendation grade|high-certainty|high certainty|lower-certainty|lower certainty)\b|"
+                r"\([abcde]\)|\([12][abcd]\)|\|\s*[abcde]\s*\||\|\s*[12][abcd]\s*\||證據等級|建議等級",
+                evidence_text,
+                flags=re.I,
+            )
+        )
+        if not has_grade_evidence:
+            return False, "本地檢索缺少證據等級或建議強度資訊"
     required = set(required_facets(user_text))
     required.update(
         facet
