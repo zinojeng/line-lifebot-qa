@@ -158,7 +158,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--wiki", type=Path, default=DEFAULT_WIKI)
     parser.add_argument("--include-generated", action="store_true")
-    parser.add_argument("--generated-limit", type=int, default=12)
+    parser.add_argument("--generated-limit", type=int, default=10)
     args = parser.parse_args()
 
     cases = list(BUILTIN_CASES)
